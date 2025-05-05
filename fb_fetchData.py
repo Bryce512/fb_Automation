@@ -14,9 +14,8 @@ def create_directory(directory):
 def format_csv_friendly_text(text):
     """Format text to be CSV friendly by replacing quotes and newlines."""
     if text:
-        # Replace double quotes with two double quotes (CSV escape format)
-        text = text.replace('"', '""')
-        # Replace newlines with spaces
+        # Don't double-escape quotes, the CSV writer will handle it
+        # Just replace newlines with spaces
         text = text.replace('\n', ' ')
     return text
 
@@ -167,12 +166,59 @@ def sanitize_for_bmp(text):
         
     return sanitized
 
+def create_bulk_csv(listings, output_file):
+    """
+    Create a CSV file formatted for Facebook Marketplace bulk upload.
+    This format includes Title, Price, Condition, Description, and Category.
+    https://www.facebook.com/marketplace/create/bulk
+    """
+    print(f"[📝] Creating bulk upload CSV file: {output_file}")
+    
+    with open(output_file, 'w', newline='', encoding='utf-8') as f:
+        # Use proper quoting settings for the CSV writer
+        writer = csv.writer(f, quoting=csv.QUOTE_MINIMAL)
+        
+        # Write header for Facebook bulk upload format
+        writer.writerow(["TITLE", "PRICE", "CONDITION", "DESCRIPTIONn", "CATEGORY"])
+        
+        count = 0
+        for listing in listings:
+            # Skip listings without images (for consistency with main CSV)
+            if not listing.get("local_images"):
+                continue
+                
+            # Get and sanitize title
+            getTitle = listing.get("title", "")
+            getTitle = sanitize_for_bmp(getTitle)
+            title = f'Rent a {getTitle}'
+            
+            # Get price (convert from cents to dollars)
+            price = int(listing.get("base_price", 0)/100)
+            
+            # Condition is always "Used - Like New"
+            condition = "Used - Like New"
+            
+            # Get description - only replace newlines, not quotes
+            random_desc = format_csv_friendly_text(sanitize_for_bmp(get_random_description(getTitle)))
+            main_desc = format_csv_friendly_text(sanitize_for_bmp(listing.get("description", "")))
+            description = f'{random_desc} [BREAK] {main_desc}'
+            
+            # Predict category
+            category = predict_category(getTitle, main_desc)
+            
+            # Write the row
+            writer.writerow([title, price, condition, description, category])
+            count += 1
+    
+    print(f"[✅] Created bulk upload CSV with {count} listings")
+    return count
+
 def create_csv(listings, output_file):
     """Create a CSV file with listing information for Facebook Marketplace."""
     print(f"[📝] Creating CSV file: {output_file}")
     
     with open(output_file, 'w', newline='', encoding='utf-8') as f:
-        writer = csv.writer(f)
+        writer = csv.writer(f, quoting=csv.QUOTE_MINIMAL)
         
         # Write header
         writer.writerow(["id", "title", "price", "description", "images", "location"])
@@ -239,6 +285,37 @@ def get_random_description(title):
         f"Have a look at my {title} for rent!",
     ]
     return descriptions[i % len(descriptions)]
+
+def predict_category(title, description=""):
+    """
+    Predict Facebook Marketplace category based on listing title and description.
+    Falls back to "Miscellaneous" if no match is found.
+    """
+    # Normalize text for matching
+    text = (title + " " + description).lower()
+    
+    # Define category mappings (keywords to Facebook Marketplace categories)
+    category_mappings = {
+        "Home Goods": ["furniture", "sofa", "chair", "table", "bed", "dresser", "desk", "shelf", "lamp", "decor"],
+        "Electronics": ["phone", "computer", "laptop", "tv", "camera", "gaming", "console", "speaker", "headphone"],
+        "Entertainment": ["game", "movie", "book", "board game", "puzzle", "video game"],
+        "Clothing & Accessories": ["shirt", "shoes", "dress", "pants", "jacket", "hat", "purse", "handbag", "watch"],
+        "Vehicles": ["car", "truck", "auto", "bike", "bicycle", "motorcycle", "scooter"],
+        "Toys & Games": ["toy", "doll", "action figure", "kids game", "playset"],
+        "Musical Instruments": ["guitar", "piano", "drum", "keyboard", "music", "instrument", "bass", "violin"],
+        "Sporting Goods": ["sport", "fitness", "exercise", "gym", "workout", "hiking", "camping", "outdoor"],
+        "Tools & Equipment": ["tool", "drill", "saw", "equipment", "ladder", "power tool", "generator", "machine"],
+        "Garden & Outdoor": ["garden", "lawn", "patio", "mower", "grill", "outdoor furniture"]
+    }
+    
+    # Check for matches
+    for category, keywords in category_mappings.items():
+        for keyword in keywords:
+            if keyword in text:
+                return category
+    
+    # Default to Miscellaneous if no match is found
+    return "Miscellaneous"
     
 def main():
     print("="*60)
@@ -307,10 +384,16 @@ def main():
         csv_file = os.path.join(base_dir, f"listings_{date_str}.csv")
         create_csv(listings_with_images, csv_file)
         
+        # Add to main() function after creating the regular CSV
+        bulk_csv_file = os.path.join(base_dir, f"bulk_listings_{date_str}.csv")
+        create_bulk_csv(listings_with_images, bulk_csv_file)
+
         print("\n[🎉] Data fetch complete!")
         print(f"[📁] CSV file: {csv_file}")
+        print(f"[📁] Bulk upload CSV file: {bulk_csv_file}")
         print(f"[📁] Images directory: {images_dir}")
-        print("\n[ℹ️] You can now use the CSV file with fb_postNewListings.py to post these listings.")
+        print("\n[ℹ️] You can now use the CSV file with fb_postListings.py to post these listings.")
+        print("[ℹ️] Or use the bulk upload CSV at https://www.facebook.com/marketplace/create/bulk")
         
     except Exception as e:
         print(f"\n[❌] An error occurred: {e}")
@@ -319,3 +402,8 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+# TODO: 
+# * Error with quotes it description
+# * Add more categories
+# * Add more random descriptions

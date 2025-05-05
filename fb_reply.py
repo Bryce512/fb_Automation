@@ -31,8 +31,8 @@ class FacebookMarketplaceResponder:
         self.responses = [
             "Hey I'm actually listing this on a rental app called Yoodlize! Reach out to me there! https://www.yoodlize.com/details/{listing_id}",
             "Thanks for your interest! Check it out on Yoodlize: https://www.yoodlize.com/details/{listing_id}",
-            "Hi! Please contact me through Yoodlize instead: https://www.yoodlize.com/details/{listing_id}",
-            "For a better rental experience, I've listed this item on Yoodlize: https://www.yoodlize.com/details/{listing_id}"
+            "Hi! Please reach out to me through Yoodlize instead: https://www.yoodlize.com/details/{listing_id}",
+            "I've actually listing this on Yoodlize: https://www.yoodlize.com/details/{listing_id}"
         ]
     
     def go_to_marketplace_messages(self):
@@ -117,7 +117,7 @@ class FacebookMarketplaceResponder:
             
             # Process all threads and check if they're unread
             for thread in threads:
-                print(f"[🔍] Checking thread: {thread.text}")
+                # print(f"[🔍] Checking thread: {thread.text}")
                 try:
                     # Fixed: Use proper CSS selector syntax with dot prefix for class name
                     class_script = """
@@ -202,7 +202,7 @@ class FacebookMarketplaceResponder:
         try:
             # Click on the thread to open it
             self.driver.execute_script("arguments[0].click();", thread)
-            time.sleep(2)  # Wait for thread to open fully
+            time.sleep(.3)  # Wait for thread to open fully
             
             # Extract listing info
             listing_info = {}
@@ -262,16 +262,16 @@ class FacebookMarketplaceResponder:
                 
                 if title_elements:
                     title = title_elements[0].text
-                    # Clean up title - remove "Rent a" prefix if present
-                    if title.lower().startswith("rent a "):
-                        title = title[7:]
+                    # Clean up title - remove everything before and including "Rent a"
+                    if "Rent a" in title:
+                        title = title[title.lower().find("rent a") + 7:].strip()
                     listing_info["title"] = title
             
             # Try to extract location/city if available
             try:
                 location_elements = self.driver.find_elements(
                     By.XPATH, 
-                    "//span[contains(text(), ',') and contains(@dir, 'auto')]"
+                    "//span[contains(text(), ',') and contains(@dir, 'auto') and contains(@class, 'xzsf02u')]"
                 )
                 if location_elements:
                     location = location_elements[0].text.strip()
@@ -295,6 +295,58 @@ class FacebookMarketplaceResponder:
         except Exception as e:
             print(f"[❌] Error extracting listing info: {e}")
             return None
+    
+    def extract_listing_info(self):
+        """Extract listing information from the current page."""
+        listing_info = {}
+        
+        try:
+            # Wait for the page to load
+            WebDriverWait(self.driver, 10).until(
+                EC.presence_of_element_located((By.XPATH, "//div[contains(@role, 'main')]"))
+            )
+            
+            # Find the marketplace listing section by looking for the span containing "Marketplace"
+            marketplace_sections = self.driver.find_elements(
+                By.XPATH,
+                "//div[.//span[contains(text(), 'Marketplace')]]"
+            )
+            
+            # Similar extraction logic as before, but now it works on the current page
+            # without requiring the thread parameter
+            
+            # Rest of your existing extraction code...
+            
+            # Extract title from various possible elements
+            title_elements = self.driver.find_elements(
+                By.XPATH,
+                "//span[contains(text(), 'Rent a')]"
+            )
+            
+            if title_elements:
+                title = title_elements[0].text
+                # Clean up title - remove everything before and including "Rent a"
+                if "Rent a" in title:
+                    title = title[title.lower().find("rent a") + 7:].strip()
+                listing_info["title"] = title
+            
+            # Try to extract location/city if available
+            location_elements = self.driver.find_elements(
+                By.XPATH, 
+                "//span[contains(text(), ',') and contains(@dir, 'auto')]"
+            )
+            if location_elements:
+                location = location_elements[0].text.strip()
+                if "," in location:
+                    listing_info["city"] = location.split(",")[0].strip()
+                else:
+                    listing_info["city"] = location
+                    
+            return listing_info
+            
+        except Exception as e:
+            print(f"[❌] Error extracting listing info: {e}")
+            return {}
     
     def find_listing_id_in_database(self, title, city=None):
         """Query the database to find the listing ID based on title and city."""
@@ -359,7 +411,7 @@ class FacebookMarketplaceResponder:
                                 row_title = row.get('title', '')
                                 
                                 # Clean up title for comparison
-                                if row_title.lower().startswith("rent a "):
+                                if (row_title.lower().startswith("rent a ")):
                                     row_title = row_title[7:].strip()
                                 
                                 # Check for a match
@@ -482,48 +534,70 @@ class FacebookMarketplaceResponder:
             return 0
         
         processed_count = 0
+        main_window = self.driver.current_window_handle
         
-        for thread in unread_threads:
+        for i, thread in enumerate(unread_threads):
             try:
-                # Open the thread and extract listing info
-                listing_info = self.open_thread_and_extract_info(thread)
+                print(f"[💬] Processing message {i+1} of {len(unread_threads)}")
+                
+                # Store current window handles before clicking
+                before_handles = set(self.driver.window_handles)
+                
+                # Click the thread (which may open in a new tab)
+                self.driver.execute_script("arguments[0].click();", thread)
+                time.sleep(1)
+                
+                # Check if new window/tab was opened
+                after_handles = set(self.driver.window_handles)
+                new_handles = after_handles - before_handles
+                
+                # If a new window was opened, switch to it
+                if new_handles:
+                    new_window = list(new_handles)[0]
+                    self.driver.switch_to.window(new_window)
+                    print("[🔄] Switched to new tab")
+                
+                # Extract listing info
+                listing_info = self.extract_listing_info()
                 
                 if not listing_info:
                     print("[⚠️] Could not extract listing info, skipping")
-                    continue
-                
-                title = listing_info.get("title")
-                city = listing_info.get("city")
-                
-                # Try to find the listing ID
-                listing_id = None
-                
-                # Method 1: Database lookup
-                if self.database_path:
-                    listing_id = self.find_listing_id_in_database(title, city)
-                
-                # Method 2: API lookup
-                if not listing_id:
-                    listing_id = self.find_listing_id_using_api(title, city)
-                
-                # Method 3: CSV lookup
-                if not listing_id:
-                    listing_id = self.find_listing_id_in_csv_files(title)
-                
-                # If we found a listing ID, send a reply
-                if listing_id:
-                    if self.send_reply(listing_id):
-                        processed_count += 1
                 else:
-                    print(f"[❌] Could not find listing ID for '{title}'")
+                    title = listing_info.get("title")
+                    city = listing_info.get("city")
+                    
+                    # Try to find the listing ID using the various methods
+                    listing_id = self.find_listing_id_in_database(title, city) or \
+                                 self.find_listing_id_using_api(title, city) or \
+                                 self.find_listing_id_in_csv_files(title)
+                    
+                    # If we found a listing ID, send a reply
+                    if listing_id:
+                        if self.send_reply(listing_id):
+                            processed_count += 1
+                    else:
+                        print(f"[❌] Could not find listing ID for '{title}'")
                 
-                # Go back to inbox
-                self.go_to_marketplace_messages()
+                # If we switched to a new window, close it and switch back
+                if new_handles:
+                    self.driver.close()  # Close current tab
+                    self.driver.switch_to.window(main_window)  # Switch back to main window
+                    print("[🔄] Closed tab and returned to main window")
+                else:
+                    # If no new window was opened, go back to inbox
+                    self.driver.execute_script("window.history.go(-1)")
+                
+                time.sleep(2)  # Wait for navigation
                 
             except Exception as e:
                 print(f"[❌] Error processing thread: {e}")
-                # Try to recover
-                self.go_to_marketplace_messages()
+                # Try to recover by returning to main window
+                try:
+                    self.driver.switch_to.window(main_window)
+                    self.go_to_marketplace_messages()
+                    time.sleep(2)
+                except:
+                    pass
         
         print(f"[📊] Successfully processed {processed_count} out of {len(unread_threads)} messages")
         return processed_count
@@ -568,7 +642,7 @@ def main():
         responder.run()
     finally:
         # Ask before closing
-        # input("\n[🏁] Press Enter to close the browser and exit...")
+        input("\n[🏁] Press Enter to close the browser and exit...")
         try:
             responder.driver.quit()
         except:

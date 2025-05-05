@@ -5,6 +5,8 @@ from selenium.webdriver.common.by import By
 from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 import sys
 
 # Global settings
@@ -1142,112 +1144,281 @@ def reset_browser_state(driver):
     
     return True
 
+
+def bulk_upload_listings(driver, csv_path):
+    """Upload multiple listings at once using Facebook's bulk upload feature."""
+    print(f"[📦] Starting bulk upload from: {csv_path}")
+    
+    try:
+        # STEP 1: Navigate to the bulk upload page
+        print("[🌐] Opening Facebook Marketplace bulk upload page...")
+        driver.get("https://www.facebook.com/marketplace/create/bulk")
+        
+        # Wait for the page to load and file input to appear
+        print("[⏳] Waiting for file input to be available...")
+        wait = WebDriverWait(driver, 20)
+        file_input = wait.until(EC.presence_of_element_located((By.XPATH, "//input[@type='file']")))
+        print("[✅] File input located")
+        
+        # STEP 2: Upload the file directly
+        absolute_path = os.path.abspath(csv_path)
+        print(f"[📤] Uploading CSV file: {absolute_path}")
+        file_input.send_keys(absolute_path)
+        print("[📤] File path sent to input element")
+        
+        # STEP 3: Wait for confirmation or success
+        print("[⏳] Waiting for upload confirmation or processing...")
+        upload_success = False
+        max_wait = 120
+        elapsed = 0
+
+        while elapsed < max_wait:
+            # Check for success or progression indicators
+            success_texts = ["success", "uploaded", "Next", "Continue", "Finish"]
+            for text in success_texts:
+                elements = driver.find_elements(By.XPATH, f"//*[contains(text(), '{text}')]")
+                for elem in elements:
+                    if elem.is_displayed():
+                        print(f"[✅] Upload confirmed by presence of: '{text}'")
+                        upload_success = True
+                        # Optionally click "Next" or continue
+                        if text in ["Next", "Continue", "Finish"]:
+                            driver.execute_script("arguments[0].click();", elem)
+                        break
+                if upload_success:
+                    break
+
+            if upload_success:
+                break
+
+            # Check for error messages
+            error_elements = driver.find_elements(By.XPATH, "//*[contains(text(), 'error') or contains(text(), 'Error') or contains(text(), 'failed') or contains(text(), 'Failed')]")
+            if error_elements:
+                print(f"[❌] Upload error detected: {error_elements[0].text}")
+                return False
+
+            time.sleep(2)
+            elapsed += 2
+            if elapsed % 10 == 0:
+                print(f"[⏳] Still waiting... ({elapsed}s)")
+
+        if not upload_success:
+            print("[⚠️] Upload did not complete within timeout.")
+            return False
+
+        print("[🎉] Bulk upload completed successfully!")
+        return True
+
+    except Exception as e:
+        print(f"[❌] Error during bulk upload: {e}")
+        return False
+
+def complete_bulk_listings(driver, regular_csv_path):
+    """Add images and location data to bulk uploaded listings."""
+    print("[🔄] Adding details to uploaded listings...")
+    
+    try:
+        # Load the regular CSV for image paths and locations
+        with open(regular_csv_path, newline='', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            listings = list(reader)
+            
+        if not listings:
+            print("[⚠️] No listings found in the regular CSV file.")
+            return 0
+            
+        print(f"[📊] Found {len(listings)} listings to complete.")
+        
+        # Navigate to Marketplace inventory/drafts
+        print("[🌐] Opening Marketplace inventory...")
+        driver.get("https://www.facebook.com/marketplace/you/selling")
+        time.sleep(2)
+        
+        # Look for "Drafts" tab and click it if not already active
+        draft_tabs = driver.find_elements(By.XPATH, "//*[contains(text(), 'Drafts')]")
+        for tab in draft_tabs:
+            if tab.is_displayed():
+                try:
+                    parent = driver.execute_script("""
+                        var elem = arguments[0];
+                        for (var i = 0; i < 5; i++) {
+                            if (elem.getAttribute('role') === 'tab' || 
+                                elem.tagName.toLowerCase() === 'a' || 
+                                elem.getAttribute('href')) {
+                                return elem;
+                            }
+                            if (!elem.parentElement) break;
+                            elem = elem.parentElement;
+                        }
+                        return elem.parentElement;
+                    """, tab)
+                    
+                    driver.execute_script("arguments[0].click();", parent)
+                    print("[✅] Clicked on Drafts tab")
+                    time.sleep(1)
+                    break
+                except:
+                    pass
+        
+        # Process each listing
+        successful = 0
+        for i, row in enumerate(listings, 1):
+            title = row.get('title', '')
+            if not title:
+                print(f"[⚠️] Listing {i} has no title, skipping")
+                continue
+                
+            print(f"\n[🔄] Processing listing {i}/{len(listings)}: {title}")
+            
+            # Find this listing in the drafts
+            found = False
+            listing_elements = driver.find_elements(By.XPATH, f"//*[contains(text(), '{title.replace('Rent a ', '')}')]")
+            
+            for elem in listing_elements:
+                try:
+                    # Find clickable parent/container
+                    listing_container = driver.execute_script("""
+                        var elem = arguments[0];
+                        for (var i = 0; i < 8; i++) {
+                            if (elem.tagName.toLowerCase() === 'a' || 
+                                elem.getAttribute('role') === 'link' ||
+                                elem.getAttribute('href') ||
+                                elem.onclick) {
+                                return elem;
+                            }
+                            if (!elem.parentElement) break;
+                            elem = elem.parentElement;
+                        }
+                        return null;
+                    """, elem)
+                    
+                    if listing_container:
+                        driver.execute_script("arguments[0].click();", listing_container)
+                        print(f"[✅] Found and clicked on listing: {title}")
+                        found = True
+                        time.sleep(2)
+                        break
+                except Exception as e:
+                    print(f"[⚠️] Error clicking listing element: {e}")
+                    continue
+            
+            if not found:
+                print(f"[⚠️] Could not find listing '{title}' in drafts")
+                continue
+            
+            # Now we're on the edit page for this listing
+            # Add images
+            images = row.get('images', '')
+            if images:
+                # Parse the image string - it can be in different formats
+                if isinstance(images, str):
+                    if images.startswith('[') and images.endswith(']'):
+                        # This is a list representation in string format
+                        image_list = images.strip('[]').split(',')
+                        image_paths = [img.strip().strip('"\'') for img in image_list]
+                    else:
+                        # Single image path
+                        image_paths = [images.strip()]
+                        
+                    # Upload the images
+                    print(f"[🖼️] Uploading {len(image_paths)} images...")
+                    upload_images(driver, image_paths)
+            
+            # Add location
+            location = row.get('location', '')
+            if location:
+                print(f"[📍] Setting location: {location}")
+                set_location(driver, location)
+            
+            # Click Next/Publish
+            if publish_listing(driver, debug=DEBUG_MODE):
+                successful += 1
+                print(f"[✅] Successfully completed listing: {title}")
+            else:
+                print(f"[❌] Failed to publish listing: {title}")
+            
+            # Go back to drafts for next listing
+            driver.get("https://www.facebook.com/marketplace/you/selling")
+            time.sleep(1)
+            
+            # Make sure we're on Drafts tab again
+            draft_tabs = driver.find_elements(By.XPATH, "//*[contains(text(), 'Drafts')]")
+            for tab in draft_tabs:
+                if tab.is_displayed():
+                    try:
+                        driver.execute_script("arguments[0].click();", tab)
+                        time.sleep(1)
+                        break
+                    except:
+                        pass
+        
+        print(f"\n[📊] Summary: Completed {successful}/{len(listings)} listings successfully.")
+        return successful
+        
+    except Exception as e:
+        print(f"[❌] Error completing bulk listings: {e}")
+        return 0
+
 def main():
     global DEBUG_MODE, AUTO_PUBLISH
     DEBUG_MODE = False
     AUTO_PUBLISH = True
-    sys.path.append(os.path.dirname(os.path.relpath("/fb_fetchData.py")))
-    sys.path.append(os.path.dirname(os.path.relpath("/fb_renewListings.py")))
-    from fb_fetchData import main as fetch_main
-    from fb_renewListings import main as renew_main
+    
+    # Fetch fresh data if needed
+    try:
+        # Import these only if they exist and are needed
+        from fb_fetchData import main as fetch_main
+        fetch_main()
+    except ImportError:
+        print("[ℹ️] fb_fetchData module not found, skipping data fetch")
+    
+    # Initialize driver
     driver = get_driver()
-
-    
-    fetch_main()
-    renew_main(driver)
     
     print("="*60)
-    print("📦 Facebook Marketplace Listing Creator")
+    print("📦 Facebook Marketplace Bulk Uploader")
     print("="*60)
-    print("\nThis tool automatically posts listings to Facebook Marketplace from a CSV file.")
+    print("\nThis tool automatically uploads listings to Facebook Marketplace using bulk upload.")
     
     try:
-        # Ask for debug mode
-        # print("\n[❓] Enable debug mode with detailed logs? (y/n, default: n)")
-        # DEBUG_MODE = input("> ").lower() == "y"  # Set global debug mode
+        # Construct paths for both bulk and regular CSV files
+        date_str = datetime.now().strftime("%Y-%m-%d")
+        data_dir = f"data_{date_str}"
+        bulk_csv_path = f"{data_dir}/bulk_listings_{date_str}.csv"
+        regular_csv_path = f"{data_dir}/listings_{date_str}.csv"
         
-        # Ask for CSV file path
-        # print("\n[❓] Enter path to CSV file with listings (default: listings.csv):")
-        csv_path = datetime.now().strftime("data_%Y-%m-%d") + "/listings_" + datetime.now().strftime("%Y-%m-%d") + ".csv"
-        # csv_path = input("> ").strip() or "data_2025-04-27/listings_2025-04-27.csv"
+        # Verify files exist
+        if not os.path.exists(bulk_csv_path):
+            print(f"[❌] Bulk CSV file not found: {bulk_csv_path}")
+            return
+            
+        if not os.path.exists(regular_csv_path):
+            print(f"[❌] Regular CSV file not found: {regular_csv_path}")
+            return
         
+        print(f"[📂] Using bulk CSV: {bulk_csv_path}")
+        print(f"[📂] Using regular CSV for details: {regular_csv_path}")
         
-        # Ask for auto-publish preference
-        # print("\n[❓] Automatically publish listings without manual review? (y/n, default: n)")
-        # AUTO_PUBLISH = input("> ").lower() == "y"  # Set global auto-publish flag
-        
-        if DEBUG_MODE:
-            print(f"\n[🔧] Debug mode: {'ON' if DEBUG_MODE else 'OFF'}")
-            print(f"[🔧] Auto-publish: {'ON' if AUTO_PUBLISH else 'OFF'}")
-        
-        # Process the CSV file
-        print(f"\n[📂] Reading listings from {csv_path}...")
-        
-        try:
-            with open(csv_path, newline='', encoding='utf-8') as f:
-                reader = csv.DictReader(f)
-                listings = list(reader)
-                
-                if not listings:
-                    print("[⚠️] No listings found in the CSV file.")
-                    return
-                
-                print(f"[📊] Found {len(listings)} listings to post.")
-                
-                
-                successful = 0
-                for i, row in enumerate(listings, 1):
-                    print(f"\n[🔄] Posting listing {i}: {row.get('title', 'Unnamed listing')}")
-                    
-                    # Pass the auto_publish and debug_mode values through the global variables
-                    success = post_listing(
-                        driver,
-                        title=row.get('title', ''),
-                        price=row.get('price', ''),
-                        description=row.get('description', ''),
-                        category=row.get('category'),
-                        location=row.get('location'),
-                        images=row.get('images')
-                    )
-                    
-                    if success:
-                        successful += 1
-                        print(f"[✅] Successfully posted: {row.get('title', 'Unnamed listing')}")
-                    else:
-                        print(f"[❌] Failed to post: {row.get('title', 'Unnamed listing')}")
-                        # Ask if user wants to retry or continue
-                        print("[❓] Retry this listing? (y/n, default: n)")
-                        retry = input("> ").lower() == "y"
-                        if retry:
-                            print("[🔄] Retrying...")
-                            if post_listing(
-                                driver,
-                                title=row.get('title', ''),
-                                price=row.get('price', ''),
-                                description=row.get('description', ''),
-                                category=row.get('category'),
-                                location=row.get('location'),
-                                images=row.get('image_path')
-                            ):
-                                successful += 1
-                                print(f"[✅] Successfully posted on retry: {row.get('title', 'Unnamed listing')}")
-                    
-                    # Ask if user wants to continue after each post
-                    reset_browser_state(driver)
-                
-                print(f"\n[📊] Summary: Posted {successful}/{i} listings successfully.")
-                
-        except FileNotFoundError:
-            print(f"[❌] CSV file not found: {csv_path}")
-        except Exception as e:
-            print(f"[❌] Error processing CSV: {e}")
+        # Step 1: Perform the bulk upload
+        if bulk_upload_listings(driver, bulk_csv_path):
+            print("[🎉] Bulk upload completed successfully!")
+            
+            # Step 2: Complete the listings with images and location
+            successful = complete_bulk_listings(driver, regular_csv_path)
+            
+            if successful > 0:
+                print(f"[🎉] Successfully completed and published {successful} listings!")
+            else:
+                print("[⚠️] No listings were successfully completed")
+        else:
+            print("[❌] Bulk upload failed, cannot proceed with completion")
     
     except Exception as e:
         print(f"\n[❌] An error occurred: {e}")
     
     finally:
         # Keep browser open until user decides to close
-        # input("\n[🏁] Press Enter to close the browser and exit...")
+        input("\n[🏁] Press Enter to close the browser and exit...")
         try:
             driver.quit()
         except:
