@@ -189,7 +189,18 @@ def create_csv(listings, output_file):
             # Sanitize title
             getTitle = sanitize_for_bmp(getTitle)
                 
-            title = f'Rent a {getTitle}'
+            # Ensure title doesn't exceed 95 characters (including prefix)
+            prefix = 'Rent a '
+            max_title_length = 95
+            
+            # Check if title would be too long
+            if len(prefix + getTitle) > max_title_length:
+                # Truncate the title and add ellipsis
+                available_length = max_title_length - len(prefix) - 3  # 3 chars for "..."
+                getTitle = getTitle[:available_length] + "..."
+                print(f"[✂️] Truncated title: {getTitle}")
+            
+            title = f'{prefix}{getTitle}'
             
             # Get the random description and sanitize
             random_desc = sanitize_for_bmp(get_random_description(getTitle))
@@ -232,11 +243,11 @@ def get_random_description(title):
     """Generate a random description for the listing."""
     i = hash(title) % 5  # Simple hash to get a number between 0 and 4
     descriptions = [
-        f"I'm renting my {title}! Check it out!",
-        f"Check out my {title} for rent!",
-        f"Looking to rent my {title}. Let me know if you're interested!",
-        f"Renting out my {title}. Message me for details!",
-        f"Have a look at my {title} for rent!",
+        f"I'm renting my {title} on the Yoodlize App! Check it out!",
+        f"Check out my {title} for rent on the Yoodlize App!",
+        f"Looking to rent my {title} through the Yoodlize App. Let me know if you're interested!",
+        f"Renting out my {title} on the Yoodlize App. Message me for details!",
+        f"Have a look at my {title} for rent on the Yoodlize App!",
     ]
     return descriptions[i % len(descriptions)]
     

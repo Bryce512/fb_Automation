@@ -1,67 +1,9 @@
 import os
 import time
 import random
-from selenium import webdriver
 from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException
-from webdriver_manager.chrome import ChromeDriverManager
-from selenium.webdriver.common.action_chains import ActionChains
-
-def get_driver():
-    """Set up and return a Chrome WebDriver with appropriate options."""
-    from selenium.webdriver.chrome.service import Service
-    from selenium.webdriver.chrome.options import Options
-    import os
-    import getpass
-    import glob
-
-    # Get current username
-    username = getpass.getuser()
-    print(f"[👤] Current user: {username}")
-    
-    # Define base profile directory and pattern
-    home_dir = os.path.expanduser("~")
-    profile_base = os.path.join(home_dir, ".fb_")
-    
-    # Check if a profile already exists for this user
-    user_profile = os.path.join(home_dir, f".fb_{username}")
-    
-    # Look for any existing FB profiles
-    existing_profiles = glob.glob(f"{profile_base}*")
-    
-    # Determine which profile to use
-    if os.path.exists(user_profile):
-        profile_path = user_profile
-        print(f"[✅] Using existing profile: {profile_path}")
-    elif existing_profiles:
-        # Use the first existing profile found
-        profile_path = existing_profiles[0]
-        existing_user = os.path.basename(profile_path).replace(".fb_", "")
-        print(f"[ℹ️] Using existing profile for user '{existing_user}': {profile_path}")
-    else:
-        # Create new profile for current user
-        profile_path = user_profile
-        print(f"[🆕] Creating new profile: {profile_path}")
-        
-        # Ensure the directory exists
-        os.makedirs(profile_path, exist_ok=True)
-    
-    # Set up Chrome options with the selected profile
-    chrome_options = Options()
-    chrome_options.add_argument(f"--user-data-dir={profile_path}")
-    chrome_options.add_argument("--start-maximized")
-    chrome_options.add_experimental_option("detach", True)
-    
-    # Add a profile indicator to the window title
-    profile_username = os.path.basename(profile_path).replace(".fb_", "")
-    chrome_options.add_argument(f"--window-name=FB Marketplace ({profile_username})")
-    
-    print(f"[🔍] Setting up Chrome with profile: {profile_path}")
-    service = Service(ChromeDriverManager().install())
-    driver = webdriver.Chrome(service=service, options=chrome_options)
-    return driver
+from fb_postListings import get_driver
 
 def renew_listings(driver, max_renewals=None, debug=True):
     """Automatically renew expired Facebook Marketplace listings.
@@ -78,7 +20,7 @@ def renew_listings(driver, max_renewals=None, debug=True):
     
     # Navigate to the selling page
     driver.get("https://www.facebook.com/marketplace/you/selling")
-    time.sleep(5)  # Wait for page to load
+    time.sleep(3)  # Allow initial page load
     
     renewed_count = 0
     
@@ -87,16 +29,14 @@ def renew_listings(driver, max_renewals=None, debug=True):
         if debug:
             print("[🔍] Looking for 'Renew Listing' buttons...")
         
-        # Scroll down a few times to load more listings
-        for _ in range(5):
-            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-            time.sleep(2)
+        # Use the improved scrolling function to load all listings
+        scroll_to_load_all_listings(driver, max_scrolls=15, scroll_delay=1.0, debug=debug)
         
         # Find all renew buttons using multiple approaches
         renew_buttons = []
         
         # Approach 1: Direct XPath for buttons containing "Renew Listing" text
-        buttons = driver.find_elements(By.XPATH, "//span[contains(text(), 'Renew Listing')]/ancestor::button | //span[contains(text(), 'Renew Listing')]/ancestor::*[@role='button']")
+        buttons = driver.find_elements(By.XPATH, "//*[contains(text(), 'Renew listing')]/ancestor::button | //span[contains(text(), 'Renew Listing')]/ancestor::*[@role='button']")
         if buttons:
             renew_buttons.extend(buttons)
             if debug:
@@ -108,7 +48,7 @@ def renew_listings(driver, max_renewals=None, debug=True):
             var elements = document.querySelectorAll('button, [role="button"], a');
             for (var i = 0; i < elements.length; i++) {
                 if (elements[i].textContent.includes('Renew') && 
-                    elements[i].textContent.includes('Listing') && 
+                    elements[i].textContent.includes('listing') && 
                     elements[i].offsetParent !== null) {
                     buttons.push(elements[i]);
                 }
@@ -173,29 +113,32 @@ def renew_listings(driver, max_renewals=None, debug=True):
                     
                 # Scroll the button into view
                 driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", button)
-                time.sleep(0.5)
+                time.sleep(0.2)
                 
                 # Click the button
                 driver.execute_script("arguments[0].click();", button)
                 
                 # Wait for confirmation or any potential dialog
-                time.sleep(2)
+                time.sleep(.5)
                 
-                # Check for any confirmation dialogs and accept them
-                try:
-                    confirm_buttons = driver.find_elements(By.XPATH, 
-                        "//span[contains(text(), 'Confirm') or contains(text(), 'OK') or contains(text(), 'Yes')]")
-                    if confirm_buttons:
-                        driver.execute_script("arguments[0].click();", confirm_buttons[0])
-                        time.sleep(1)
-                except:
-                    pass
+                # First try to handle the specific "Renew your listing?" dialog
+                dialog_handled = handle_renew_dialog(driver, debug)
+                
+                # If the specific dialog wasn't found, check for generic confirmation dialogs
+                if not dialog_handled:
+                    try:
+                        confirm_buttons = driver.find_elements(By.XPATH, 
+                            "//span[contains(text(), 'Confirm') or contains(text(), 'OK') or contains(text(), 'Yes')]")
+                        if confirm_buttons:
+                            driver.execute_script("arguments[0].click();", confirm_buttons[0])
+                            time.sleep(.4)
+                    except Exception as e:
+                        if debug:
+                            print(f"[⚠️] Error with generic confirmation dialog: {e}")
                 
                 print(f"[✅] Renewed listing {i}/{to_renew}: {listing_info}")
                 renewed_count += 1
                 
-                # Add a small delay between renewals
-                time.sleep(random.uniform(1.0, 2.0))
                 
             except Exception as e:
                 if debug:
@@ -207,6 +150,98 @@ def renew_listings(driver, max_renewals=None, debug=True):
     except Exception as e:
         print(f"[❌] Error during renewal process: {e}")
         return renewed_count
+
+def handle_renew_dialog(driver, debug=True):
+    """Handle the 'Renew your listing?' dialog by clicking the confirmation button.
+    
+    Args:
+        driver: The Selenium WebDriver instance
+        debug: Whether to print debug messages
+    
+    Returns:
+        bool: True if dialog was found and handled, False otherwise
+    """
+    try:
+        # Look for the dialog heading "Renew your listing?"
+        dialog_heading = driver.find_elements(By.XPATH, "//h2//span[contains(text(), 'Renew your listing?')]")
+        
+        # Look for the "Renew listing" button within the dialog
+        renew_buttons = driver.find_elements(By.XPATH, 
+            "//span[contains(text(), 'Renew listing')]/ancestor::div[@role='button']")
+        
+        if dialog_heading and renew_buttons:
+            if debug:
+                print("[🔄] Found 'Renew your listing?' dialog, confirming...")
+            
+            # Click the "Renew listing" button in the dialog
+            driver.execute_script("arguments[0].click();", renew_buttons[0])
+            time.sleep(.2)
+            return True
+            
+        return False
+        
+    except Exception as e:
+        if debug:
+            print(f"[⚠️] Error handling renewal dialog: {e}")
+        return False
+
+def scroll_to_load_all_listings(driver, max_scrolls=15, scroll_delay=1.0, debug=True):
+    """
+    Scroll down the page gradually to load all listings.
+    
+    Args:
+        driver: The Selenium WebDriver instance
+        max_scrolls: Maximum number of scroll attempts
+        scroll_delay: Delay between scrolls in seconds
+        debug: Whether to print debug messages
+    """
+    if debug:
+        print(f"[📜] Loading all listings by scrolling (max {max_scrolls} scrolls)...")
+    
+    previous_height = 0
+    scroll_count = 0
+    
+    while scroll_count < max_scrolls:
+        # Scroll down to bottom
+        driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+        scroll_count += 1
+        
+        # Wait to load page
+        time.sleep(scroll_delay)
+        
+        # Calculate new scroll height and compare with last scroll height
+        new_height = driver.execute_script("return document.body.scrollHeight")
+        
+        if debug:
+            print(f"[📜] Scroll {scroll_count}/{max_scrolls} - Page height: {new_height}")
+        
+        # Break if no new content was loaded
+        if new_height == previous_height:
+            if debug:
+                print(f"[📜] No new content after scroll {scroll_count}, stopping scrolling")
+            break
+            
+        previous_height = new_height
+    
+    # Final scroll back to top to ensure all elements are rendered properly
+    driver.execute_script("window.scrollTo(0, 0);")
+    time.sleep(0.5)
+    
+    # Now scroll down gradually to ensure all content is loaded
+    total_height = driver.execute_script("return document.body.scrollHeight")
+    viewport_height = driver.execute_script("return window.innerHeight")
+    
+    if debug:
+        print(f"[📜] Gradual scroll through page (total height: {total_height}px)")
+    
+    # Scroll in smaller increments to ensure all elements load
+    for i in range(0, total_height, viewport_height // 2):
+        driver.execute_script(f"window.scrollTo(0, {i});")
+        time.sleep(0.2)
+    
+    # Final scroll to the bottom
+    driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+    time.sleep(1)
 
 def main(driver=None, close_browser=False):
     """Run the renewal process.

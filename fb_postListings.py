@@ -93,9 +93,6 @@ def get_driver():
     print("[🌐] Opening Facebook to check login status...")
     driver.get("https://www.facebook.com/")
     
-    # Wait for page to load
-    time.sleep(2)
-    
     # Check if we need to log in
     login_required = False
     
@@ -164,11 +161,6 @@ def get_driver():
             sys.exit(1)
     else:
         print("[✅] Already logged in to Facebook")
-    
-    # Navigate to Marketplace
-    # print("[🛒] Opening Facebook Marketplace...")
-    # driver.get("https://www.facebook.com/marketplace/")
-    # time.sleep(2)
     
     return driver
 
@@ -250,7 +242,7 @@ def upload_images(driver, image_paths, debug=False):
             if i == 0:  # For the first image
                 # Direct approach - look for file inputs immediately
                 file_inputs = driver.find_elements(By.XPATH, "//input[@type='file']")
-                if file_inputs:
+                if (file_inputs and len(file_inputs) > 0):
                     file_inputs[0].send_keys(image)
                     time.sleep(0.25)  # Allow upload to start
                     uploaded_count += 1
@@ -258,13 +250,13 @@ def upload_images(driver, image_paths, debug=False):
                 else:
                     # If no file input found, try clicking a photo button first
                     photo_buttons = driver.find_elements(By.XPATH, "//span[contains(text(), 'Add Photo')]")
-                    if photo_buttons:
+                    if (photo_buttons and len(photo_buttons) > 0):
                         driver.execute_script("arguments[0].click();", photo_buttons[0])
                         time.sleep(0.3)  # Wait for file dialog to appear
                         
                         # Look for file input again
                         file_inputs = driver.find_elements(By.XPATH, "//input[@type='file']")
-                        if file_inputs:
+                        if (file_inputs and len(file_inputs) > 0):
                             file_inputs[0].send_keys(image_paths[i])
                             time.sleep(0.1)
                             uploaded_count += 1
@@ -275,7 +267,7 @@ def upload_images(driver, image_paths, debug=False):
                     "//span[contains(text(), 'Add Photo') or contains(text(), 'Add More')]/..|"
                     "//div[contains(@aria-label, 'Add photo') or contains(@aria-label, 'Add more')]")
                 
-                if add_buttons:
+                if (add_buttons and len(add_buttons) > 0):
                     # Try to find the most appropriate button (usually the "+" button)
                     suitable_button = None
                     for button in add_buttons:
@@ -295,7 +287,7 @@ def upload_images(driver, image_paths, debug=False):
                         
                         # Look for file input
                         file_inputs = driver.find_elements(By.XPATH, "//input[@type='file']")
-                        if file_inputs:
+                        if (file_inputs and len(file_inputs) > 0):
                             file_inputs[0].send_keys(image)
                             time.sleep(0.1)
                             uploaded_count += 1
@@ -326,7 +318,7 @@ def upload_images(driver, image_paths, debug=False):
                     if clicked:
                         time.sleep(0.1)
                         file_inputs = driver.find_elements(By.XPATH, "//input[@type='file']")
-                        if file_inputs:
+                        if (file_inputs and len(file_inputs) > 0):
                             file_inputs[0].send_keys(image)
                             time.sleep(0.1)
                             uploaded_count += 1
@@ -392,7 +384,7 @@ def click_hide_from_friends(driver, debug=False):
         # First approach: Direct text match
         hide_elements = driver.find_elements(By.XPATH, "//span[contains(text(), 'Hide from friends')]")
         
-        if hide_elements:
+        if (hide_elements and len(hide_elements) > 0):
             if debug:
                 print(f"[💡] Found {len(hide_elements)} 'Hide from friends' elements")
             
@@ -427,7 +419,7 @@ def click_hide_from_friends(driver, debug=False):
         # Second approach: Look for similar text if exact match not found
         hide_elements = driver.find_elements(By.XPATH, "//*[contains(text(), 'Hide') and contains(text(), 'friends')]")
         
-        if hide_elements:
+        if (hide_elements and len(hide_elements) > 0):
             if debug:
                 print(f"[💡] Found {len(hide_elements)} alternative 'Hide from friends' elements")
             driver.execute_script("arguments[0].click();", hide_elements[0])
@@ -482,7 +474,7 @@ def publish_listing(driver, debug=False):
         # Approach 1: Look for the text directly
         next_buttons = driver.find_elements(By.XPATH, "//span[contains(text(), 'Next')]")
         
-        if next_buttons:
+        if (next_buttons and len(next_buttons) > 0):
             for button in next_buttons:
                 try:
                     # Find the clickable parent
@@ -551,7 +543,7 @@ def publish_listing(driver, debug=False):
             # Approach 1: Look for the text directly
             publish_buttons = driver.find_elements(By.XPATH, "//span[contains(text(), 'Publish')]")
             
-            if publish_buttons:
+            if (publish_buttons and len(publish_buttons) > 0):
                 for button in publish_buttons:
                     try:
                         # Find the clickable parent
@@ -647,7 +639,7 @@ def handle_redirect_warning(driver, debug=False):
         
         for text in warning_texts:
             elements = driver.find_elements(By.XPATH, f"//*[contains(text(), '{text}')]")
-            if elements:
+            if (elements and len(elements) > 0):
                 print(f"[⚠️] Detected warning: '{text}'")
                 
                 # Look for "Stay on Page" or "Continue" buttons
@@ -656,7 +648,7 @@ def handle_redirect_warning(driver, debug=False):
                     "contains(text(), 'Cancel') or contains(text(), 'Try Again') or " +
                     "contains(text(), 'OK') or contains(text(), 'Okay')]")
                 
-                if stay_buttons:
+                if (stay_buttons and len(stay_buttons) > 0):
                     for button in stay_buttons:
                         if button.is_displayed():
                             driver.execute_script("arguments[0].click();", button)
@@ -815,8 +807,6 @@ def post_listing(driver, title, price, description, location, images, category=N
     driver.get("https://www.facebook.com/marketplace/create/item")
     
     try:
-        # Wait for page to load
-        # time.sleep(1)
 
         
         # 1. Upload images FIRST
@@ -851,110 +841,99 @@ def post_listing(driver, title, price, description, location, images, category=N
             return False
         # time.sleep(random.uniform(0.2, 0.5))
         
-        # Replace your price entry code with this:
-
         # 3. Price
         print("[🔍] Finding price field...")
-        price_input = find_element_by_text(driver, "Price", debug=debug)
-        if price_input:
-            try:
-                # Get the actual price from the row data or fallback to 1000
-                price_str = str(price)
-                print(f"[🔍] Attempting to enter price: {price_str}")
+        try:
+            # First try to find the label/span with "Price" text
+            price_label = find_element_by_text(driver, "Price", debug=debug)
+            
+            if price_label:
+                print("[✓] Found price label, now finding the associated input")
                 
-                # First try to get the actual input element
-                price_element = price_input
-                element_tag = driver.execute_script("return arguments[0].tagName.toLowerCase();", price_element)
-                
-                # If we found a non-input element, find the actual input nearby
-                if element_tag != "input":
-                    print("[🔍] Found a non-input price element, locating the actual input...")
-                    try:
-                        # Get the input from parent
-                        price_element = driver.execute_script("""
-                            var element = arguments[0];
-                            var parent = element.parentElement;
-                            return parent.querySelector('input');
-                        """, price_input)
-                        
-                        if not price_element:
-                            # Look in surrounding elements
-                            price_element = driver.find_element(By.XPATH, "//input[@aria-invalid='true' or @aria-describedby]")
-                    except:
-                        pass
-                
-                # Clear any existing value first
-                driver.execute_script("arguments[0].value = '';", price_element)
-                
-                # Try multiple methods to set the price
-                # Method 1: JavaScript direct value assignment
-                driver.execute_script("arguments[0].value = arguments[1];", price_element, price_str)
-                
-                # Method 2: Trigger input events after setting value
-                driver.execute_script("""
-                    var input = arguments[0];
-                    input.value = arguments[1];
+                # Use JavaScript to find the actual input element (sibling or child)
+                price_input = driver.execute_script("""
+                    var label = arguments[0];
                     
-                    // Trigger events that Facebook's validation might be listening for
-                    var inputEvent = new Event('input', { bubbles: true });
-                    var changeEvent = new Event('change', { bubbles: true });
-                    var keydownEvent = new KeyboardEvent('keydown', { key: '1', bubbles: true });
-                    var keyupEvent = new KeyboardEvent('keyup', { key: '1', bubbles: true });
+                    // Try to find the input in the same container
+                    var container = label.closest('div');
+                    if (container) {
+                        var input = container.querySelector('input[type="text"]');
+                        if (input) return input;
+                    }
                     
-                    // Dispatch all events
-                    input.dispatchEvent(inputEvent);
-                    input.dispatchEvent(changeEvent);
-                    input.dispatchEvent(keydownEvent);
-                    input.dispatchEvent(keyupEvent);
-                """, price_element, price_str)
+                    // If not found, look for inputs near the label
+                    var inputs = document.querySelectorAll('input[type="text"]');
+                    for (var i = 0; i < inputs.length; i++) {
+                        var rect1 = label.getBoundingClientRect();
+                        var rect2 = inputs[i].getBoundingClientRect();
+                        // Check if input is near the label (within reasonable distance)
+                        if (Math.abs(rect1.top - rect2.top) < 50) {
+                            return inputs[i];
+                        }
+                    }
+                    return null;
+                """, price_label)
                 
-                # Method 3: Use ActionChains as a backup
-                try:
-                    actions = ActionChains(driver)
-                    actions.click(price_element)
-                    actions.pause(0.1)
+                if price_input:
+                    # More human-like interaction
+                    price_str = str(price)
                     
-                    # Clear existing value
-                    actions.key_down(Keys.CONTROL).send_keys('a').key_up(Keys.CONTROL)
-                    actions.send_keys(Keys.BACK_SPACE)
-                    actions.pause(0.1)
+                    # 1. Focus the element first
+                    driver.execute_script("arguments[0].focus();", price_input)
+                    time.sleep(0.1)
                     
-                    # Type the new value with pauses between characters
+                    # 2. Clear using backspace/delete to be more human-like
+                    driver.execute_script("""
+                        var input = arguments[0];
+                        input.value = '';
+                        input.dispatchEvent(new Event('input', { bubbles: true }));
+                    """, price_input)
+                    
+                    # 3. Type the price character by character like a human would
                     for char in price_str:
-                        actions.send_keys(char)
-                        actions.pause(0.05)
+                        ActionChains(driver).send_keys(char).pause(0.05).perform()
                     
-                    actions.perform()
-                except Exception as e:
-                    print(f"[⚠️] ActionChains method failed: {e}")
-                
-                print("[✅] Price entered using multiple methods")
-                
-            except Exception as e:
-                print(f"[❌] Error entering price: {e}")
-                print("retrying price input...")
-                handle_redirect_warning(driver, debug=debug)
-                
-                # Try a last-resort method - find by specific attributes
-                try:
-                    print("[🔍] Attempting direct XPath selection for price field...")
-                    price_inputs = driver.find_elements(By.XPATH, "//input[@type='text' and (contains(@class, 'x1i10hfl') or @aria-invalid='true')]")
+                    # 4. Press Tab to move to next field (this often triggers validation)
+                    ActionChains(driver).send_keys(Keys.TAB).perform()
                     
-                    if price_inputs:
-                        for input_element in price_inputs:
-                            try:
-                                driver.execute_script("arguments[0].value = arguments[1];", input_element, price_str)
-                                driver.execute_script("arguments[0].dispatchEvent(new Event('change', {bubbles:true}));", input_element)
-                                print("[✅] Found alternative price input and entered value")
-                                break
-                            except:
-                                continue
-                except Exception as e:
-                    print(f"[❌] Last resort price entry failed: {e}")
+                    print(f"[✅] Price set to {price_str} using human-like typing")
+                    time.sleep(0.5)  # Wait for validation
+                    
+                    # 5. Verify the price was set correctly
+                    current_value = driver.execute_script("return arguments[0].value;", price_input)
+                    if current_value != price_str:
+                        print(f"[⚠️] Price verification failed. Expected: {price_str}, Found: {current_value}")
+                        
+                        # Try one more time with direct method
+                        driver.execute_script("""
+                            var input = arguments[0];
+                            var value = arguments[1];
+                            input.value = value;
+                            
+                            // More extensive event simulation
+                            input.dispatchEvent(new Event('input', { bubbles: true }));
+                            input.dispatchEvent(new Event('change', { bubbles: true }));
+                            input.dispatchEvent(new Event('blur', { bubbles: true }));
+                            
+                            // Use React's synthetic events if available
+                            if (window.React && window.React.__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED) {
+                                // Try to trigger React's synthetic events
+                                var nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                                nativeInputValueSetter.call(input, value);
+                            }
+                        """, price_input, price_str)
+                        
+                        ActionChains(driver).send_keys(Keys.TAB).perform()
+                        print("[🔄] Attempted alternative price setting method")
+                    
+                else:
+                    handle_redirect_warning(driver, debug=debug)
+                    print("[❌] Could not find price field")
                     return False
-        else:
+                
+        except Exception as e:
+            print(f"[❌] Error entering price: {e}")
             handle_redirect_warning(driver, debug=debug)
-            print("[❌] Could not find price field")
             return False
         # time.sleep(random.uniform(0.8, 1.2))
         
@@ -979,7 +958,7 @@ def post_listing(driver, title, price, description, location, images, category=N
                 for selector in selectors:
                     try:
                         options = driver.find_elements(By.XPATH, selector)
-                        if options:
+                        if (options and len(options) > 0):
                             # Click the first matching option
                             driver.execute_script("arguments[0].click();", options[0])
                             print("[✅] Category set to Miscellaneous")
@@ -1032,7 +1011,7 @@ def post_listing(driver, title, price, description, location, images, category=N
             # Look for "Used - Good" in the options
             good_options = driver.find_elements(By.XPATH, "//*[contains(text(), 'Used - Good') or contains(text(), 'Good')]")
             
-            if good_options and len(good_options) > 0:
+            if (good_options and len(good_options) > 0):
                 print(f"[🔍] Found {len(good_options)} potential 'Good' condition options")
                 
                 # Click the first one that seems most appropriate
@@ -1091,6 +1070,8 @@ def post_listing(driver, title, price, description, location, images, category=N
             print("[ℹ️] 'Hide from friends' option not found or not clickable")
         # time.sleep(random.uniform(0.8, 1.2))
         
+        handle_redirect_warning(driver, debug=debug)
+
         # 9. Handle publishing based on AUTO_PUBLISH setting
         if AUTO_PUBLISH:
             print("[🔍] Auto-publishing listing...")

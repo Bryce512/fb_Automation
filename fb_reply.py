@@ -1,3 +1,6 @@
+# TODO: 
+# if someone replies to the message, we reply again. Check if message has been sent
+
 import os
 import time
 import random
@@ -31,8 +34,8 @@ class FacebookMarketplaceResponder:
         self.responses = [
             "Hey I'm actually listing this on a rental app called Yoodlize! Reach out to me there! https://www.yoodlize.com/details/{listing_id}",
             "Thanks for your interest! Check it out on Yoodlize: https://www.yoodlize.com/details/{listing_id}",
-            "Hi! Please contact me through Yoodlize instead: https://www.yoodlize.com/details/{listing_id}",
-            "For a better rental experience, I've listed this item on Yoodlize: https://www.yoodlize.com/details/{listing_id}"
+            "Hi! I'm handling messages through a new rental app! Message me through Yoodlize instead: https://www.yoodlize.com/details/{listing_id}",
+            "I've actually listed this item on Yoodlize so message me through that! https://www.yoodlize.com/details/{listing_id}"
         ]
     
     def go_to_marketplace_messages(self):
@@ -468,28 +471,37 @@ class FacebookMarketplaceResponder:
             return False
     
     def process_unread_messages(self):
-        """Process all unread messages and send Yoodlize links."""
+        """Process all unread messages and send Yoodlize links one at a time."""
         print("[🔄] Starting to process unread messages...")
         
-        # Navigate to messages inbox
-        if not self.go_to_marketplace_messages():
-            return 0
-        
-        # Find all unread threads
-        unread_threads = self.find_unread_messages()
-        if not unread_threads:
-            print("[ℹ️] No unread messages to process")
-            return 0
-        
         processed_count = 0
+        more_messages = True
         
-        for thread in unread_threads:
+        while more_messages:
+            # Navigate to messages inbox (reload completely each time)
+            if not self.go_to_marketplace_messages():
+                return processed_count
+            
+            # Allow time for the page to fully load
+            time.sleep(3)
+            
+            # Find unread threads - but we only need the first one
+            unread_threads = self.find_unread_messages()
+            if not unread_threads:
+                print("[ℹ️] No more unread messages to process")
+                more_messages = False
+                break
+            
             try:
+                # Process just the first unread thread
+                thread = unread_threads[0]
+                
                 # Open the thread and extract listing info
                 listing_info = self.open_thread_and_extract_info(thread)
                 
                 if not listing_info:
                     print("[⚠️] Could not extract listing info, skipping")
+                    # Add a refresh here to avoid getting stuck on problematic threads
                     continue
                 
                 title = listing_info.get("title")
@@ -514,18 +526,17 @@ class FacebookMarketplaceResponder:
                 if listing_id:
                     if self.send_reply(listing_id):
                         processed_count += 1
+                        print(f"[✅] Successfully processed message {processed_count}")
+                        # Wait a moment to ensure the message is sent before refreshing
+                        time.sleep(2)
                 else:
                     print(f"[❌] Could not find listing ID for '{title}'")
-                
-                # Go back to inbox
-                self.go_to_marketplace_messages()
-                
+                    
             except Exception as e:
                 print(f"[❌] Error processing thread: {e}")
-                # Try to recover
-                self.go_to_marketplace_messages()
+                # Continue with next iteration - the page will refresh
         
-        print(f"[📊] Successfully processed {processed_count} out of {len(unread_threads)} messages")
+        print(f"[📊] Successfully processed {processed_count} messages")
         return processed_count
     
     def run(self):
