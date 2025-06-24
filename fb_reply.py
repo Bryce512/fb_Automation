@@ -1,4 +1,4 @@
-# TODO: 
+# TODO:
 # if someone replies to the message, we reply again. Check if message has been sent
 
 import os
@@ -16,6 +16,64 @@ from selenium.common.exceptions import TimeoutException, NoSuchElementException
 
 # Import existing functions from your codebase
 from fb_postListings import get_driver, handle_redirect_warning
+
+def scroll_to_load_all_listings(driver, max_scrolls=5, scroll_delay=1.0, debug=True):
+    """
+    Scroll down the page gradually to load all content.
+    
+    Args:
+        driver: The Selenium WebDriver instance
+        max_scrolls: Maximum number of scroll attempts
+        scroll_delay: Delay between scrolls in seconds
+        debug: Whether to print debug messages
+    """
+    if debug:
+        print(f"[📜] Loading all content by scrolling (max {max_scrolls} scrolls)...")
+    
+    previous_height = 0
+    scroll_count = 0
+    
+    while scroll_count < max_scrolls:
+        # Scroll down to bottom
+        driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+        scroll_count += 1
+        
+        # Wait to load page
+        time.sleep(scroll_delay)
+        
+        # Calculate new scroll height and compare with last scroll height
+        new_height = driver.execute_script("return document.body.scrollHeight")
+        
+        if debug:
+            print(f"[📜] Scroll {scroll_count}/{max_scrolls} - Page height: {new_height}")
+        
+        # Break if no new content was loaded
+        if new_height == previous_height:
+            if debug:
+                print(f"[📜] No new content after scroll {scroll_count}, stopping scrolling")
+            break
+            
+        previous_height = new_height
+    
+    # Final scroll back to top to ensure all elements are rendered properly
+    driver.execute_script("window.scrollTo(0, 0);")
+    time.sleep(0.5)
+    
+    # Now scroll down gradually to ensure all content is loaded
+    total_height = driver.execute_script("return document.body.scrollHeight")
+    viewport_height = driver.execute_script("return window.innerHeight")
+    
+    if debug:
+        print(f"[📜] Gradual scroll through page (total height: {total_height}px)")
+    
+    # Scroll in smaller increments to ensure all elements load
+    for i in range(0, total_height, viewport_height // 2):
+        driver.execute_script(f"window.scrollTo(0, {i});")
+        time.sleep(0.2)
+    
+    # Final scroll to the bottom
+    driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+    time.sleep(1)
 
 class FacebookMarketplaceResponder:
     def __init__(self, database_path=None, debug=False):
@@ -43,6 +101,11 @@ class FacebookMarketplaceResponder:
         print("[🔍] Opening Facebook Marketplace messages...")
         try:
             self.driver.get("https://www.facebook.com/marketplace/inbox?targetTab=SELLER")
+            time.sleep(3)  # Allow initial page load
+            
+            # Scroll to load all messages that might be below the fold
+            scroll_to_load_all_listings(self.driver, max_scrolls=5, scroll_delay=1.0, debug=self.debug)
+            
             return True
         except Exception as e:
             print(f"[❌] Error navigating to messages: {e}")

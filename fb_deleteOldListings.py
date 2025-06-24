@@ -1,3 +1,12 @@
+# NOTE: This isnt gonna work completely
+    #  need data to test with. 
+    # - deletes functionality not confirmed
+    # - reposts functionality not confirmed
+    # - would work for reposting once but then the 
+    #       listing date changes and accessing the csv wouldnt work.
+    #       * maybe we change dir name to reposted_ but leave the listing .csv the same
+# TODO: Delete files after a certain amount of time (how long?)
+
 import os
 import time
 import csv
@@ -473,13 +482,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-# NOTE: This isnt gonna work completely
-    #  need data to test with. 
-    # - deletes functionality not confirmed
-    # - reposts functionality not confirmed
-    # - would work for reposting once but then the 
-    #       listing date changes and accessing the csv wouldnt work.
-    #       * maybe we change dir name to reposted_ but leave the listing .csv the same
-# TODO: Delete files after a certain amount of time (how long?)

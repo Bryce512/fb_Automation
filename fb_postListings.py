@@ -1,3 +1,8 @@
+# TODO 
+# Having issues with setting location by zip code 
+# if correct zip isnt the first option down.
+
+
 from datetime import datetime
 import os, csv, time
 from selenium import webdriver
