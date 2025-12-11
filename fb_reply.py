@@ -16,64 +16,7 @@ from selenium.common.exceptions import TimeoutException, NoSuchElementException
 
 # Import existing functions from your codebase
 from fb_postListings import get_driver, handle_redirect_warning
-
-def scroll_to_load_all_listings(driver, max_scrolls=5, scroll_delay=1.0, debug=True):
-    """
-    Scroll down the page gradually to load all content.
-    
-    Args:
-        driver: The Selenium WebDriver instance
-        max_scrolls: Maximum number of scroll attempts
-        scroll_delay: Delay between scrolls in seconds
-        debug: Whether to print debug messages
-    """
-    if debug:
-        print(f"[📜] Loading all content by scrolling (max {max_scrolls} scrolls)...")
-    
-    previous_height = 0
-    scroll_count = 0
-    
-    while scroll_count < max_scrolls:
-        # Scroll down to bottom
-        driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-        scroll_count += 1
-        
-        # Wait to load page
-        time.sleep(scroll_delay)
-        
-        # Calculate new scroll height and compare with last scroll height
-        new_height = driver.execute_script("return document.body.scrollHeight")
-        
-        if debug:
-            print(f"[📜] Scroll {scroll_count}/{max_scrolls} - Page height: {new_height}")
-        
-        # Break if no new content was loaded
-        if new_height == previous_height:
-            if debug:
-                print(f"[📜] No new content after scroll {scroll_count}, stopping scrolling")
-            break
-            
-        previous_height = new_height
-    
-    # Final scroll back to top to ensure all elements are rendered properly
-    driver.execute_script("window.scrollTo(0, 0);")
-    time.sleep(0.5)
-    
-    # Now scroll down gradually to ensure all content is loaded
-    total_height = driver.execute_script("return document.body.scrollHeight")
-    viewport_height = driver.execute_script("return window.innerHeight")
-    
-    if debug:
-        print(f"[📜] Gradual scroll through page (total height: {total_height}px)")
-    
-    # Scroll in smaller increments to ensure all elements load
-    for i in range(0, total_height, viewport_height // 2):
-        driver.execute_script(f"window.scrollTo(0, {i});")
-        time.sleep(0.2)
-    
-    # Final scroll to the bottom
-    driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-    time.sleep(1)
+from fb_renewListings import scroll_to_load_all_listings
 
 class FacebookMarketplaceResponder:
     def __init__(self, database_path=None, debug=False):
@@ -91,7 +34,7 @@ class FacebookMarketplaceResponder:
         # Response templates
         self.responses = [
             "Hey I'm actually listing this on a rental app called Yoodlize! Reach out to me there! https://www.yoodlize.com/details/{listing_id}",
-            "Thanks for your interest! Check it out on Yoodlize: https://www.yoodlize.com/details/{listing_id}",
+            "Thanks for your interest! Check it out on the new app Yoodlize: https://www.yoodlize.com/details/{listing_id}",
             "Hi! I'm handling messages through a new rental app! Message me through Yoodlize instead: https://www.yoodlize.com/details/{listing_id}",
             "I've actually listed this item on Yoodlize so message me through that! https://www.yoodlize.com/details/{listing_id}"
         ]
@@ -101,10 +44,8 @@ class FacebookMarketplaceResponder:
         print("[🔍] Opening Facebook Marketplace messages...")
         try:
             self.driver.get("https://www.facebook.com/marketplace/inbox?targetTab=SELLER")
-            time.sleep(3)  # Allow initial page load
             
             # Scroll to load all messages that might be below the fold
-            scroll_to_load_all_listings(self.driver, max_scrolls=5, scroll_delay=1.0, debug=self.debug)
             
             return True
         except Exception as e:
@@ -171,19 +112,55 @@ class FacebookMarketplaceResponder:
             # First, scroll to load more threads
             self.scroll_to_load_more_threads(scroll_count=5)
             
-            # Find all conversation threads - use a selector that matches active threads with image tags
+            # Find all conversation threads - use a more specific selector for marketplace message threads
+            # Look for threads that are within the marketplace messages container
             threads = self.driver.find_elements(
                 By.XPATH, 
-                "//div[@role='button'][.//img or .//*[name()='svg']//*[name()='image']]"
-
+                "//div[@role='main']//div[@role='button'][.//img or .//*[name()='svg']//*[name()='image']][contains(@class, '') or not(@class)]"
             )
+            
+            # Alternative: Look for threads that contain marketplace-specific indicators
+            if not threads:
+                threads = self.driver.find_elements(
+                    By.XPATH, 
+                    "//div[@role='button'][.//span[contains(text(), 'Marketplace')] or .//img[@alt] or .//*[name()='svg']]"
+                )
             
             if self.debug:
                 print(f"[💬] Found {len(threads)} total message threads")
             
-            # Process all threads and check if they're unread
+            # Process all threads and check if they're unread AND marketplace-related
             for thread in threads:
-                print(f"[🔍] Checking thread: {thread.text}")
+                thread_text = thread.text.replace('\n', ' ')[:50] if thread.text else "Unknown thread"
+                if self.debug:
+                    print(f"[🔍] Checking thread: {thread_text}")
+                
+                # First check if this thread contains marketplace-related content
+                marketplace_related = False
+                try:
+                    # Look for marketplace indicators in the thread preview text
+                    thread_text_lower = thread.text.lower() if thread.text else ""
+                    marketplace_keywords = ['marketplace', 'rent a', '$', 'listing', 'available']
+                    marketplace_related = any(keyword in thread_text_lower for keyword in marketplace_keywords)
+                    
+                    if not marketplace_related:
+                        # Also check for marketplace-specific elements within the thread
+                        marketplace_elements = thread.find_elements(
+                            By.XPATH,
+                            ".//span[contains(text(), 'Marketplace')] | .//span[contains(text(), 'Rent a')] | .//span[contains(text(), '$')]"
+                        )
+                        marketplace_related = len(marketplace_elements) > 0
+                    
+                    if not marketplace_related:
+                        if self.debug:
+                            print(f"   - Skipping: Not marketplace-related")
+                        continue
+                        
+                except Exception as e:
+                    if self.debug:
+                        print(f"   - Error checking marketplace relation: {e}")
+                    continue
+                
                 try:
                     # Fixed: Use proper CSS selector syntax with dot prefix for class name
                     class_script = """
@@ -266,9 +243,33 @@ class FacebookMarketplaceResponder:
     def open_thread_and_extract_info(self, thread):
         """Open a message thread and extract listing information."""
         try:
+            # First, let's get some info about the thread before clicking
+            thread_text = thread.text.replace('\n', ' ')[:50] if thread.text else "Unknown thread"
+            if self.debug:
+                print(f"[🔍] Attempting to open thread: {thread_text}")
+            
             # Click on the thread to open it
             self.driver.execute_script("arguments[0].click();", thread)
-            time.sleep(2)  # Wait for thread to open fully
+            time.sleep(3)  # Wait for thread to open fully
+            
+            # Validate that this is actually a marketplace conversation
+            # Look for marketplace indicators in the conversation
+            marketplace_indicators = self.driver.find_elements(
+                By.XPATH,
+                "//span[contains(text(), 'Marketplace')] | //div[contains(text(), 'Marketplace')] | //span[contains(text(), 'Rent a')] | //span[contains(text(), '$')]"
+            )
+            
+            if not marketplace_indicators:
+                if self.debug:
+                    print(f"[⚠️] This doesn't appear to be a marketplace conversation - no marketplace indicators found")
+                return None
+            
+            # Check the URL to make sure we're still in marketplace messages
+            current_url = self.driver.current_url
+            if "marketplace" not in current_url.lower():
+                if self.debug:
+                    print(f"[⚠️] Not in marketplace context - current URL: {current_url}")
+                return None
             
             # Extract listing info
             listing_info = {}
@@ -598,6 +599,79 @@ class FacebookMarketplaceResponder:
             except Exception as e:
                 print(f"[❌] Error processing thread: {e}")
                 # Continue with next iteration - the page will refresh
+        
+        # Before finishing, do a final scroll to ensure we didn't miss any messages
+        print("[🔍] Performing final scroll to check for any remaining messages...")
+        if self.go_to_marketplace_messages():
+            scroll_to_load_all_listings(self.driver, max_scrolls=5, scroll_delay=1.0, debug=self.debug)
+            
+            # Check one more time for unread messages
+            final_unread = self.find_unread_messages()
+            if final_unread and len(final_unread) > 0:
+                print(f"[⚠️] Found {len(final_unread)} additional unread messages after final scroll!")
+                print("[�] Processing these additional messages...")
+                
+                # Process the additional messages found after scrolling - one at a time to avoid stale refs
+                message_found = True
+                while message_found:
+                    try:
+                        # Process only the first unread thread to avoid stale references
+                        thread = final_unread[0]
+                        
+                        # Open the thread and extract listing info
+                        listing_info = self.open_thread_and_extract_info(thread)
+                        
+                        if not listing_info:
+                            print("[⚠️] Could not extract listing info, skipping")
+                            break
+                        
+                        title = listing_info.get("title")
+                        city = listing_info.get("city")
+                        
+                        # Try to find the listing ID
+                        listing_id = None
+                        
+                        # Method 1: Database lookup
+                        if self.database_path:
+                            listing_id = self.find_listing_id_in_database(title, city)
+                        
+                        # Method 2: API lookup
+                        if not listing_id:
+                            listing_id = self.find_listing_id_using_api(title, city)
+                        
+                        # Method 3: CSV lookup
+                        if not listing_id:
+                            listing_id = self.find_listing_id_in_csv_files(title)
+                        
+                        # If we found a listing ID, send a reply
+                        if listing_id:
+                            if self.send_reply(listing_id):
+                                processed_count += 1
+                                print(f"[✅] Successfully processed additional message {processed_count}")
+                                # Wait a moment to ensure the message is sent
+                                time.sleep(2)
+                        else:
+                            print(f"[❌] Could not find listing ID for '{title}'")
+                        
+                        # Reload and check for more messages
+                        if not self.go_to_marketplace_messages():
+                            break
+                        time.sleep(3)
+                        scroll_to_load_all_listings(self.driver, max_scrolls=5, scroll_delay=1.0, debug=self.debug)
+                        final_unread = self.find_unread_messages()
+                        
+                        if not final_unread or len(final_unread) == 0:
+                            print("[✅] No more additional unread messages found")
+                            message_found = False
+                        else:
+                            print(f"[🔄] Found {len(final_unread)} more unread messages, continuing...")
+                            
+                    except Exception as e:
+                        print(f"[❌] Error processing additional thread: {e}")
+                        break
+                        
+            else:
+                print("[✅] Final check complete - no additional unread messages found")
         
         print(f"[📊] Successfully processed {processed_count} messages")
         return processed_count
