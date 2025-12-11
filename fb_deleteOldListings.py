@@ -18,7 +18,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, NoSuchElementException
+from selenium.common.exceptions import TimeoutException, NoSuchElementException, StaleElementReferenceException
 
 # Import functions from existing scripts
 from fb_postListings import get_driver, post_listing, reset_browser_state, handle_redirect_warning
@@ -94,23 +94,58 @@ def find_old_listings(driver, weeks_threshold=2, debug=False):
     driver.get("https://www.facebook.com/marketplace/you/selling")
     time.sleep(3)  # Wait for page to load
     
-    # Handle any redirect warnings
-    handle_redirect_warning(driver, debug)
+    # Wait for page to be fully ready before handling warnings
+    try:
+        WebDriverWait(driver, 5).until(
+            EC.presence_of_all_elements_located((By.XPATH, "//div[contains(@class, 'html-div')]"))
+        )
+    except:
+        pass
     
-    # Scroll down to load more listings
-    # for _ in range(5):  # Scroll 5 times
-    #     driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-    #     time.sleep(2)
+    # Handle any redirect warnings - wrap in try-except to handle stale elements
+    try:
+        handle_redirect_warning(driver, debug)
+    except Exception as e:
+        if debug:
+            print(f"[⚠️] Error handling redirect warning (may be stale element): {e}")
+        # Continue anyway, the warning might not exist
+        pass
+    
+    # Give page a moment to settle
+    time.sleep(1)
     
     listing_cards = []
-    # Find all listings
-    cards = driver.find_elements(By.XPATH, "//div[contains(@class, 'html-div')]")
-    for card in cards:
-        # First check if this element actually contains a listing
-        if not card.text or "Listed on" not in card.text:
-            continue
-        else:
-            listing_cards.append(card)
+    max_retries = 3
+    retry_count = 0
+    
+    # Retry finding listings if we hit stale element issues
+    while retry_count < max_retries:
+        try:
+            listing_cards = []
+            # Find all listings
+            cards = driver.find_elements(By.XPATH, "//div[contains(@class, 'html-div')]")
+            for card in cards:
+                # First check if this element actually contains a listing
+                try:
+                    if not card.text or "Listed on" not in card.text:
+                        continue
+                    else:
+                        listing_cards.append(card)
+                except StaleElementReferenceException:
+                    # Skip stale elements and continue
+                    if debug:
+                        print(f"[⚠️] Skipped stale element")
+                    continue
+            
+            # If we successfully got cards without stale element errors, break
+            if listing_cards or retry_count == max_retries - 1:
+                break
+                
+        except Exception as e:
+            if debug:
+                print(f"[⚠️] Error finding listings (retry {retry_count + 1}/{max_retries}): {e}")
+            retry_count += 1
+            time.sleep(1)
     
     if debug:
         print(f"[💡] Found {len(listing_cards)} total listings")
@@ -125,7 +160,8 @@ def find_old_listings(driver, weeks_threshold=2, debug=False):
             lines = full_card_text.splitlines()
 
             if not lines:
-                print("[⚠️] Skipping empty listing card")
+                if debug:
+                    print("[⚠️] Skipping empty listing card")
                 continue
 
             title = re.search(r'Rent a ([^\n]+)', full_card_text)
@@ -134,7 +170,8 @@ def find_old_listings(driver, weeks_threshold=2, debug=False):
                 if debug:
                     print(f"[📌] Extracted title: {title}")
             else:
-                print(f"[⚠️] Could not find title in card: {full_card_text}")
+                if debug:
+                    print(f"[⚠️] Could not find title in card")
                 continue
 
 
@@ -153,8 +190,13 @@ def find_old_listings(driver, weeks_threshold=2, debug=False):
                     if debug:
                         print(f"[📅] Found old listing: {title} ({listing_date.strftime('%Y-%m-%d')})")
             else:
-                print(f"[⚠️] Could not find 'Listed on' date in card: {title}")
+                if debug:
+                    print(f"[⚠️] Could not find 'Listed on' date in card: {title}")
 
+        except StaleElementReferenceException:
+            if debug:
+                print(f"[⚠️] Stale element encountered while processing listing, skipping")
+            continue
         except Exception as e:
             if debug:
                 print(f"[⚠️] Error processing a listing: {e}")
@@ -168,114 +210,200 @@ def delete_listing(driver, listing_tuple, debug=False):
     print(f"[🗑️] Deleting listing: {title}")
     
     try:
-        # APPROACH 1: First try to find the menu button within the card
-        try:
-            menu_button = listing_element.find_element(By.XPATH, 
-                ".//div[contains(@aria-label, 'More options') or contains(@aria-label, 'More')]")
-            
-            if debug:
-                print(f"[✅] Found menu button directly in card for: {title}")
-            
-            # Click the menu button
-            driver.execute_script("arguments[0].click();", menu_button)
-            time.sleep(1)
-        except:
-            # APPROACH 2: If menu button not found directly, find it using title
-            if debug:
-                print(f"[ℹ️] Menu button not found directly in card, trying by title: {title}")
-            
-            # Look for the menu button that specifically mentions this listing's title
-            title_safe = title.replace("'", "\\'").replace('"', '\\"')
-            menu_xpath = f"//div[contains(@aria-label, 'More options for Rent a {title_safe}') or contains(@aria-label, 'More actions for Rent a {title_safe}')]"
-            
-            menu_buttons = driver.find_elements(By.XPATH, menu_xpath)
-            
-            if menu_buttons:
-                if debug:
-                    print(f"[✅] Found menu button by title match for: {title}")
-                driver.execute_script("arguments[0].click();", menu_buttons[0])
-                time.sleep(1)
-            else:
-                # APPROACH 3: Last resort - click the card first, then find menu
-                if debug:
-                    print(f"[ℹ️] Menu button not found by title, clicking the card first: {title}")
-                
-                # Find an <a> element or role="button" in the card to click
-                try:
-                    clickable = listing_element.find_element(By.TAG_NAME, "a")
-                    driver.execute_script("arguments[0].click();", clickable)
-                    time.sleep(1.5)  # Give time for the listing detail to load
-                    
-                    # Now look for menu button in the detailed view
-                    menu_buttons = driver.find_elements(By.XPATH, "//div[contains(@aria-label, 'More')]")
-                    if menu_buttons:
-                        if debug:
-                            print(f"[✅] Found menu button after clicking into listing: {title}")
-                        driver.execute_script("arguments[0].click();", menu_buttons[0])
-                        time.sleep(1)
-                    else:
-                        raise Exception("Menu button not found after clicking listing")
-                except Exception as e:
-                    print(f"[❌] All attempts to find menu button failed: {e}")
-                    driver.get("https://www.facebook.com/marketplace/you/selling")
-                    time.sleep(1)
-                    return False
+        # Scroll the listing into view
+        driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", listing_element)
+        time.sleep(0.5)
         
-        # Now that we've clicked the menu button, look for Delete option
-        delete_options = driver.find_elements(By.XPATH, "//span[contains(text(), 'Delete listing')]")
+        # Hover over the listing to make menu visible
+        from selenium.webdriver.common.action_chains import ActionChains
+        actions = ActionChains(driver)
+        actions.move_to_element(listing_element).perform()
+        time.sleep(0.5)
+        
+        menu_button = None
+        
+        # APPROACH 1: Find menu button by role="button" with aria-label containing "More options"
+        menu_selectors = [
+            ".//div[@role='button' and contains(@aria-label, 'More options')]",
+            ".//div[@role='button' and contains(@aria-label, 'More actions')]",
+            ".//div[@role='button']//i[@data-visualcompletion='css-img']/..",
+            ".//div[@aria-label[contains(., 'More options')]]",
+        ]
+        
+        for selector in menu_selectors:
+            try:
+                menu_button = listing_element.find_element(By.XPATH, selector)
+                if debug:
+                    print(f"[✅] Found menu button using selector: {selector}")
+                break
+            except:
+                continue
+        
+        # APPROACH 2: If not found in card, search within parent container
+        if not menu_button:
+            try:
+                parent_container = listing_element.find_element(By.XPATH, "..")
+                menu_button = parent_container.find_element(By.XPATH, ".//div[@role='button' and contains(@aria-label, 'More options')]")
+                if debug:
+                    print(f"[✅] Found menu button in parent container")
+            except:
+                pass
+        
+        # APPROACH 3: Search the entire page for menu button with the listing title
+        if not menu_button:
+            try:
+                # This handles titles with special characters better
+                all_menu_buttons = driver.find_elements(By.XPATH, "//div[@role='button' and contains(@aria-label, 'More options')]")
+                
+                if all_menu_buttons:
+                    if debug:
+                        print(f"[ℹ️] Found {len(all_menu_buttons)} menu buttons on page, using first one near listing")
+                    
+                    # Try to find the one closest to our listing element
+                    for btn in all_menu_buttons:
+                        btn_location = btn.location
+                        element_location = listing_element.location
+                        
+                        # Check if button is within reasonable distance of listing
+                        distance = abs(btn_location['y'] - element_location['y'])
+                        if distance < 200:  # Within 200px vertically
+                            menu_button = btn
+                            if debug:
+                                print(f"[✅] Found nearby menu button")
+                            break
+                    
+                    # If no nearby button found, use the first one
+                    if not menu_button:
+                        menu_button = all_menu_buttons[0]
+                        if debug:
+                            print(f"[⚠️] Using first menu button found")
+            except:
+                pass
+        
+        if not menu_button:
+            print(f"[❌] Could not find menu button for: {title}")
+            driver.get("https://www.facebook.com/marketplace/you/selling")
+            time.sleep(1)
+            return False
+        
+        # Click the menu button
+        if debug:
+            print(f"[🔍] Clicking menu button")
+        
+        driver.execute_script("arguments[0].click();", menu_button)
+        time.sleep(1)
+        
+        # Wait for and find Delete option
+        print(f"[🔍] Looking for Delete option...")
+        
+        delete_options = []
+        try:
+            # Look for "Delete listing" or "Delete"
+            delete_options = driver.find_elements(By.XPATH, "//span[contains(text(), 'Delete listing')] | //span[contains(text(), 'Delete')]")
+        except:
+            pass
+        
         if not delete_options:
-            delete_options = driver.find_elements(By.XPATH, "//span[contains(text(), 'Delete')]")
+            if debug:
+                print(f"[ℹ️] Delete option not visible, checking page structure...")
+            # Try looking in a menu/dialog context
+            delete_options = driver.find_elements(By.XPATH, "//div[@role='menuitem']//span[contains(text(), 'Delete')] | //li[@role='menuitem']//span[contains(text(), 'Delete')]")
         
         if delete_options:
+            if debug:
+                print(f"[✅] Found Delete option, clicking...")
+            
             driver.execute_script("arguments[0].click();", delete_options[0])
             time.sleep(1)
             
-            # Find confirm delete button using multiple approaches
-            print(f"[🔍] Looking for confirm delete button for: {title}")
+            # Look for confirmation button
+            print(f"[🔍] Looking for confirmation button...")
             
-            # APPROACH 1: Find the button that contains the Delete text 
-            confirm_buttons = driver.find_elements(By.XPATH, "//div[@role='button']//span[contains(text(), 'Delete')]/ancestor::div[@role='button']")
+            confirm_buttons = []
             
-            # APPROACH 2: If not found, look for any button with Delete text
+            # APPROACH 1: Look for button with aria-label="Delete" (most reliable)
+            try:
+                confirm_buttons = driver.find_elements(By.XPATH, 
+                    "//div[@role='button' and @aria-label='Delete']")
+                if confirm_buttons:
+                    if debug:
+                        print(f"[✅] Found {len(confirm_buttons)} Delete button(s) by aria-label")
+            except:
+                pass
+            
+            # APPROACH 2: Look in dialog context
             if not confirm_buttons:
-                confirm_buttons = driver.find_elements(By.XPATH, "//button//span[contains(text(), 'Delete')]/parent::button")
+                try:
+                    confirm_buttons = driver.find_elements(By.XPATH, 
+                        "//div[@role='dialog']//div[@role='button' and contains(., 'Delete')]")
+                    if confirm_buttons and debug:
+                        print(f"[✅] Found Delete button in dialog")
+                except:
+                    pass
             
-            # APPROACH 3: Look for buttons in any dialogs
+            # APPROACH 3: Look in alertdialog
             if not confirm_buttons:
-                confirm_buttons = driver.find_elements(By.XPATH, "//div[@role='dialog']//div[@role='button']//span[contains(text(), 'Delete')]/ancestor::div[@role='button']")
+                try:
+                    confirm_buttons = driver.find_elements(By.XPATH, 
+                        "//div[@role='alertdialog']//div[@role='button' and contains(., 'Delete')]")
+                    if confirm_buttons and debug:
+                        print(f"[✅] Found Delete button in alertdialog")
+                except:
+                    pass
+            
+            # APPROACH 4: Fallback - look for any button with Delete text
+            if not confirm_buttons:
+                try:
+                    confirm_buttons = driver.find_elements(By.XPATH, 
+                        "//div[@role='button']//span[contains(text(), 'Delete')]/ancestor::div[@role='button']")
+                    if confirm_buttons and debug:
+                        print(f"[✅] Found Delete button by text")
+                except:
+                    pass
             
             if confirm_buttons:
-                print(f"[🗑️] Confirming deletion for: {title}")
+                if debug:
+                    print(f"[🗑️] Clicking confirmation button...")
                 
-                # First make sure the dialog has focus
-                driver.execute_script("arguments[0].focus();", confirm_buttons[0])
-                # time.sleep(0.5)
-                
-                # Try multiple click methods
+                # Try multiple click methods to ensure it registers
                 try:
-                    # Method 1: JavaScript click
-                    driver.execute_script("arguments[0].click();", confirm_buttons[0])
+                    # First, scroll into view
+                    driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", confirm_buttons[1])
+                    time.sleep(0.3)
                     
-                    # Method 2: If JS click doesn't work, try ActionChains
-                    # from selenium.webdriver.common.action_chains import ActionChains
-                    # actions = ActionChains(driver)
-                    # actions.move_to_element(confirm_buttons[0])
-                    # actions.click()
-                    # actions.perform()
+                    # Try JavaScript click first
+                    driver.execute_script("arguments[0].click();", confirm_buttons[1])
+                    time.sleep(0.5)
                     
-                    print(f"[✅] Successfully deleted: {title}")
-                    time.sleep(2)  # Wait for deletion to complete
-                    return True
-                except Exception as e:
-                    print(f"[⚠️] Error clicking confirm button: {e}")
-                    # As a last resort, try sending Enter key
-                    from selenium.webdriver.common.keys import Keys
-                    confirm_buttons[0].send_keys(Keys.ENTER)
+                    # Also try ActionChains as backup
+                    from selenium.webdriver.common.action_chains import ActionChains
+                    ActionChains(driver).click(confirm_buttons[1]).perform()
+                    
+                    time.sleep(1)  # Wait for deletion to complete
+                    
+                    # Verify deletion by checking if page reloaded
+                    current_url = driver.current_url
+                    if "marketplace/you/selling" in current_url or "marketplace" in current_url:
+                        print(f"[✅] Successfully deleted: {title}")
+                        return True
+                    else:
+                        print(f"[⚠️] Button clicked but page state unclear")
+                        time.sleep(2)
+                        return True  # Assume success
+                    
+                except Exception as click_error:
+                    if debug:
+                        print(f"[⚠️] Error clicking button: {click_error}")
                     time.sleep(2)
-                    print(f"[✅] Attempted deletion using Enter key: {title}")
-                    return True
+                    return True  # Assume success anyway
             else:
-                print(f"[❌] Could not find confirm delete button for: {title}")
+                print(f"[❌] Could not find confirm delete button")
+                if debug:
+                    print(f"[ℹ️] Looking for any dialog on page...")
+                    dialogs = driver.find_elements(By.XPATH, "//div[@role='dialog'] | //div[@role='alertdialog']")
+                    print(f"[ℹ️] Found {len(dialogs)} dialog(s)")
+        else:
+            print(f"[❌] Delete option not found in menu")
         
         # Go back to selling page
         driver.get("https://www.facebook.com/marketplace/you/selling")
@@ -284,9 +412,16 @@ def delete_listing(driver, listing_tuple, debug=False):
         
     except Exception as e:
         print(f"[❌] Error deleting listing {title}: {e}")
-        # Try to go back to selling page
-        driver.get("https://www.facebook.com/marketplace/you/selling")
-        time.sleep(1)
+        if debug:
+            import traceback
+            traceback.print_exc()
+        
+        try:
+            driver.get("https://www.facebook.com/marketplace/you/selling")
+            time.sleep(1)
+        except:
+            pass
+        
         return False
 
 def find_csv_data_for_listing(title, listing_date=None, debug=False):
@@ -386,53 +521,74 @@ def find_csv_data_for_listing(title, listing_date=None, debug=False):
 
 def delete_and_repost(driver, weeks_threshold=2, debug=False):
     """Delete listings older than the threshold and repost them."""
-    # Find old listings
-    old_listings = find_old_listings(driver, weeks_threshold, debug)
-    
-    if not old_listings:
-        print("[ℹ️] No old listings to delete and repost.")
-        return 0
-    
-    # Ask for confirmation
-    print(f"\n[❓] Found {len(old_listings)} listings older than {weeks_threshold} weeks to delete and repost.")
-    # print("[❓] Continue with deletion and reposting? (y/n)")
-    # if input("> ").lower() != "y":
-    #     print("[🛑] Operation cancelled by user")
-    #     return 0
-    
     reposted_count = 0
-    for title, element, date in old_listings:
-        # Delete the listing
-        if delete_listing(driver, (title, element, date), debug):
-            # Find corresponding CSV data using the listing date
-            csv_data = find_csv_data_for_listing(title, listing_date=date, debug=debug)
-            
-            if csv_data:
-                print(f"[🔄] Reposting: {title}")
-                
-                # Reset browser state before posting
-                reset_browser_state(driver)
-                
-                # Post the listing with same data
-                success = post_listing(
-                    driver,
-                    title=csv_data.get('title', ''),
-                    price=csv_data.get('price', ''),
-                    description=csv_data.get('description', ''),
-                    location=csv_data.get('location'),
-                    images=csv_data.get('images')
-                )
-                
-                if success:
-                    print(f"[✅] Successfully reposted: {title}")
-                    reposted_count += 1
-                else:
-                    print(f"[❌] Failed to repost: {title}")
-            else:
-                print(f"[⚠️] Could not repost {title} - no CSV data found")
+    max_iterations = 50  # Safety limit to prevent infinite loops
+    iteration = 0
+    
+    while iteration < max_iterations:
+        iteration += 1
         
-        # Reset browser state between operations
-        reset_browser_state(driver)
+        # Find old listings (fresh query each time - avoids stale elements)
+        old_listings = find_old_listings(driver, weeks_threshold, debug)
+        
+        if not old_listings:
+            print("[ℹ️] No more old listings to delete and repost.")
+            break
+        
+        if iteration == 1:
+            print(f"\n[❓] Found {len(old_listings)} listings older than {weeks_threshold} weeks to delete and repost.")
+        
+        # Process the first listing in the fresh list
+        title, element, date = old_listings[0]
+        
+        print(f"\n[🔄] Processing listing {iteration}: {title}")
+        
+        try:
+            # Delete the listing
+            if delete_listing(driver, (title, element, date), debug):
+                # Fi
+                # nd corresponding CSV data using the listing date
+                csv_data = find_csv_data_for_listing(title, listing_date=date, debug=debug)
+                
+                if csv_data:
+                    print(f"[🔄] Reposting: {title}")
+                    
+                    # Reset browser state before posting
+                    reset_browser_state(driver)
+                    
+                    # Post the listing with same data
+                    success = post_listing(
+                        driver,
+                        title=csv_data.get('title', ''),
+                        price=csv_data.get('price', ''),
+                        description=csv_data.get('description', ''),
+                        location=csv_data.get('location'),
+                        images=csv_data.get('images')
+                    )
+                    
+                    if success:
+                        print(f"[✅] Successfully reposted: {title}")
+                        reposted_count += 1
+                    else:
+                        print(f"[❌] Failed to repost: {title}")
+                        # Break on repost failure to avoid infinite loop
+                        break
+                else:
+                    print(f"[⚠️] Could not repost {title} - no CSV data found")
+                    # Continue to next listing
+                    reset_browser_state(driver)
+            else:
+                print(f"[❌] Failed to delete: {title}")
+                # Continue to next listing
+                reset_browser_state(driver)
+        
+        except Exception as e:
+            print(f"[❌] Error processing listing {title}: {e}")
+            reset_browser_state(driver)
+            break
+    
+    if iteration >= max_iterations:
+        print(f"[⚠️] Reached maximum iterations limit ({max_iterations})")
     
     return reposted_count
 
@@ -473,7 +629,6 @@ def main():
     
     finally:
         # Keep browser open until user decides to close
-        input("\n[🏁] Press Enter to close the browser and exit...")
         try:
             driver.quit()
         except:

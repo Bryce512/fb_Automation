@@ -1,4 +1,4 @@
-# TODO 
+# TODO: 
 # Having issues with setting location by zip code 
 # if correct zip isnt the first option down.
 
@@ -13,8 +13,103 @@ from selenium.webdriver.common.keys import Keys
 import sys
 
 # Global settings
-DEBUG_MODE = False  # Global debug flag, will be set from main()
-AUTO_PUBLISH = False  # Global auto-publish flag, will be set from main()
+DEBUG_MODE = True  # Global debug flag, will be set from main()
+AUTO_PUBLISH = True  # Global auto-publish flag, will be set from main()
+
+def detect_active_driver():
+    """
+    Detect if there's an active Chrome WebDriver session from a previous run.
+    Returns the WebDriver instance if found, None otherwise.
+    """
+    import psutil
+    import os
+    import getpass
+    
+    try:
+        username = getpass.getuser()
+        profile_base = os.path.expanduser(f"~/.fb_{username}")
+        
+        # Check 1: Look for existing Chrome processes
+        chrome_processes = []
+        for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+            try:
+                if 'chrome' in proc.name().lower() or 'chromium' in proc.name().lower():
+                    # Check if it's using our profile
+                    cmdline = ' '.join(proc.cmdline())
+                    if profile_base in cmdline:
+                        chrome_processes.append(proc)
+                        print(f"[🔍] Found active Chrome process: PID {proc.pid}")
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+        
+        if chrome_processes:
+            print(f"[⚠️] Found {len(chrome_processes)} active Chrome process(es) from previous session")
+            return True
+        
+        # Check 2: Look for profile lock file
+        lock_file = os.path.join(profile_base, "Singleton")
+        if os.path.exists(lock_file):
+            print(f"[⚠️] Profile lock file exists: {lock_file}")
+            return True
+        
+        return False
+        
+    except Exception as e:
+        print(f"[⚠️] Error detecting active driver: {e}")
+        return False
+
+def cleanup_stale_driver(username=None):
+    """
+    Clean up stale Chrome processes and lock files from previous sessions.
+    """
+    import psutil
+    import os
+    import getpass
+    import time
+    
+    if not username:
+        username = getpass.getuser()
+    
+    profile_base = os.path.expanduser(f"~/.fb_{username}")
+    cleaned = False
+    
+    try:
+        # Kill existing Chrome processes using this profile
+        for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+            try:
+                if 'chrome' in proc.name().lower() or 'chromium' in proc.name().lower():
+                    cmdline = ' '.join(proc.cmdline())
+                    if profile_base in cmdline:
+                        print(f"[🔒] Terminating stale Chrome process: PID {proc.pid}")
+                        proc.terminate()
+                        try:
+                            proc.wait(timeout=3)
+                        except psutil.TimeoutExpired:
+                            proc.kill()
+                        cleaned = True
+                        time.sleep(0.5)
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+        
+        # Remove lock files
+        lock_file = os.path.join(profile_base, "Singleton")
+        if os.path.exists(lock_file):
+            try:
+                os.remove(lock_file)
+                print(f"[🔒] Removed stale lock file")
+                cleaned = True
+            except Exception as e:
+                print(f"[⚠️] Could not remove lock file: {e}")
+        
+        if cleaned:
+            time.sleep(1)  # Wait for cleanup to complete
+            print("[✅] Cleaned up stale driver session")
+        
+        return cleaned
+        
+    except Exception as e:
+        print(f"[❌] Error cleaning up stale driver: {e}")
+        return False
 
 def get_driver():
     """Set up and return a Chrome WebDriver with appropriate options."""
@@ -27,8 +122,15 @@ def get_driver():
     from selenium.webdriver.support.ui import WebDriverWait
     from selenium.webdriver.support import expected_conditions as EC
 
-    # Get current username
     username = getpass.getuser()
+    
+    # Check for stale driver from previous session
+    if detect_active_driver():
+        cleanup_stale_driver(username)
+    else:
+        print("[ℹ️] Keeping previous session active")
+    
+    # Get current username
     print(f"[👤] Current user: {username}")
     
     # Define base profile directory and pattern
@@ -169,6 +271,34 @@ def get_driver():
     
     return driver
 
+def close_driver(driver=None):
+    """
+    Safely close the Selenium WebDriver if one is open.
+    
+    Args:
+        driver: The WebDriver instance to close. Can be None.
+    
+    Returns:
+        None
+    
+    Behavior:
+        - If driver is provided and open, closes it gracefully
+        - If driver is None or already closed, continues without error
+    """
+    if driver is not None:
+        try:
+            driver.quit()
+            print("[✅] Browser session closed successfully")
+        except Exception as e:
+            # Driver might already be closed or in an invalid state
+            try:
+                driver.close()
+            except:
+                # If close also fails, just continue
+                pass
+    else: 
+        print("[ℹ️] No browser session to close")
+    # If driver is None, just continue without doing anything
 
 def find_element_by_text(driver, text, element_type=None, debug=False):
     """Find an element by text and return the related input field."""
@@ -849,29 +979,22 @@ def post_listing(driver, title, price, description, location, images, category=N
         # 3. Price
         print("[🔍] Finding price field...")
         try:
-            # First try to find the label/span with "Price" text
             price_label = find_element_by_text(driver, "Price", debug=debug)
             
             if price_label:
                 print("[✓] Found price label, now finding the associated input")
                 
-                # Use JavaScript to find the actual input element (sibling or child)
                 price_input = driver.execute_script("""
                     var label = arguments[0];
-                    
-                    // Try to find the input in the same container
                     var container = label.closest('div');
                     if (container) {
                         var input = container.querySelector('input[type="text"]');
                         if (input) return input;
                     }
-                    
-                    // If not found, look for inputs near the label
                     var inputs = document.querySelectorAll('input[type="text"]');
                     for (var i = 0; i < inputs.length; i++) {
                         var rect1 = label.getBoundingClientRect();
                         var rect2 = inputs[i].getBoundingClientRect();
-                        // Check if input is near the label (within reasonable distance)
                         if (Math.abs(rect1.top - rect2.top) < 50) {
                             return inputs[i];
                         }
@@ -880,116 +1003,110 @@ def post_listing(driver, title, price, description, location, images, category=N
                 """, price_label)
                 
                 if price_input:
-                    # More human-like interaction
                     price_str = str(price)
-                    
-                    # 1. Focus the element first
                     driver.execute_script("arguments[0].focus();", price_input)
-                    time.sleep(0.1)
+                    time.sleep(0.15)
                     
-                    # 2. Clear using backspace/delete to be more human-like
                     driver.execute_script("""
                         var input = arguments[0];
                         input.value = '';
                         input.dispatchEvent(new Event('input', { bubbles: true }));
                     """, price_input)
                     
-                    # 3. Type the price character by character like a human would
+                    # Type price character by character
                     for char in price_str:
                         ActionChains(driver).send_keys(char).pause(0.05).perform()
                     
-                    # 4. Press Tab to move to next field (this often triggers validation)
+                    # Press Tab and wait for validation/re-render
                     ActionChains(driver).send_keys(Keys.TAB).perform()
+                    time.sleep(1)  # Increased wait for page re-render
                     
-                    print(f"[✅] Price set to {price_str} using human-like typing")
-                    time.sleep(0.5)  # Wait for validation
-                    
-                    # 5. Verify the price was set correctly
+                    # Verify price (it may have $ added automatically)
                     current_value = driver.execute_script("return arguments[0].value;", price_input)
-                    if current_value != price_str:
-                        print(f"[⚠️] Price verification failed. Expected: {price_str}, Found: {current_value}")
-                        
-                        # Try one more time with direct method
-                        driver.execute_script("""
-                            var input = arguments[0];
-                            var value = arguments[1];
-                            input.value = value;
-                            
-                            // More extensive event simulation
-                            input.dispatchEvent(new Event('input', { bubbles: true }));
-                            input.dispatchEvent(new Event('change', { bubbles: true }));
-                            input.dispatchEvent(new Event('blur', { bubbles: true }));
-                            
-                            // Use React's synthetic events if available
-                            if (window.React && window.React.__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED) {
-                                // Try to trigger React's synthetic events
-                                var nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-                                nativeInputValueSetter.call(input, value);
-                            }
-                        """, price_input, price_str)
-                        
-                        ActionChains(driver).send_keys(Keys.TAB).perform()
-                        print("[🔄] Attempted alternative price setting method")
+                    print(f"[✓] Price field value: {current_value}")
                     
                 else:
                     handle_redirect_warning(driver, debug=debug)
                     print("[❌] Could not find price field")
                     return False
-                
+                    
         except Exception as e:
             print(f"[❌] Error entering price: {e}")
             handle_redirect_warning(driver, debug=debug)
             return False
-        # time.sleep(random.uniform(0.8, 1.2))
-        
-        # 4. Category
+
+        # 4. Category - RE-FIND THE ELEMENT to avoid stale references
         print("[🔍] Setting category to Miscellaneous...")
-        category_input = find_element_by_text(driver, "Category", debug=debug)
-        if category_input:
-            # Use JavaScript to ensure the click works
-            category_input.click()
-            category_input.send_keys("miscellaneous")
-            category_input.send_keys(Keys.DOWN)
-            category_input.send_keys(Keys.ENTER)
-            # driver.execute_script("arguments[0].click();", category_input)
-            time.sleep(.2)  # Allow dropdown to open fully
+        try:
+            # Wait MUCH longer for the page to stabilize after price field validation
+            time.sleep(2)  # Increased from 0.5 to 2 seconds
             
+            # Re-find the category field fresh (not using cached reference)
+            category_input = find_element_by_text(driver, "Category", debug=debug)
+            
+            if category_input:
+                # Scroll into view
+                driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", category_input)
+                time.sleep(0.3)
+                
+                # Wait for any validation states to clear
+                time.sleep(0.5)
+                
+                # Clear any existing value first
+                driver.execute_script("""
+                    arguments[0].value = '';
+                    arguments[0].dispatchEvent(new Event('input', { bubbles: true }));
+                """, category_input)
+                
+                time.sleep(0.2)
+                
+                # Now focus and type using JavaScript + ActionChains combo
+                driver.execute_script("arguments[0].focus();", category_input)
+                time.sleep(0.3)
+                
+                # Use ActionChains for typing to simulate human input
+                ActionChains(driver).send_keys("m").pause(0.1).perform()  # Type first letter
+                time.sleep(0.4)
+                
+                # Type the rest
+                ActionChains(driver).send_keys("iscellaneous").pause(0.1).perform()
+                time.sleep(0.6)
+                
+                # Wait for dropdown options to appear
+                print("[⏳] Waiting for category dropdown options...")
+                time.sleep(1)
+                
+                # Select first option with keyboard
+                ActionChains(driver).send_keys(Keys.DOWN).pause(0.2).perform()
+                time.sleep(0.3)
+                
+                ActionChains(driver).send_keys(Keys.ENTER).perform()
+                time.sleep(0.5)
+                
+                print("[✅] Category set to Miscellaneous")
+            else:
+                print("[⚠️] Could not find category field")
+                
+        except Exception as e:
+            print(f"[❌] Error setting category: {e}")
+            # Check if there's a validation error blocking the field
             try:
-                # Try multiple selectors for Miscellaneous in the dropdown
-                selectors = [
-                    "//span[contains(text(), 'Miscellaneous')]",
-                ]
-                
-                for selector in selectors:
-                    try:
-                        options = driver.find_elements(By.XPATH, selector)
-                        if (options and len(options) > 0):
-                            # Click the first matching option
-                            driver.execute_script("arguments[0].click();", options[0])
-                            print("[✅] Category set to Miscellaneous")
-                            # time.sleep(1)
-                            break
-                    except:
-                        continue
-                
-                # If none of the selectors worked, use a JavaScript fallback
-                if not any(driver.find_elements(By.XPATH, s) for s in selectors):
-                    driver.execute_script("""
-                        var elements = document.querySelectorAll('span, div, li');
-                        for (var i = 0; i < elements.length; i++) {
-                            if (elements[i].textContent.includes('Miscellaneous')) {
-                                elements[i].click();
-                                return true;
-                            }
-                        }
-                        return false;
-                    """)
-                    print("[✅] Category set using JavaScript")
-            except Exception as e:
-                print(f"[⚠️] Could not select Miscellaneous category: {e}")
-        else:
-            print("[⚠️] Could not find category field")
-        # time.sleep(random.uniform(0.2, 0.5))
+                aria_invalid = driver.execute_script("""
+                    var input = document.querySelector('input[aria-label="Category"]');
+                    return input ? input.getAttribute('aria-invalid') : null;
+                """)
+                if aria_invalid == 'true':
+                    print("[⚠️] Category field has validation error - waiting for resolution...")
+                    time.sleep(3)
+                    # Try again
+                    category_input = find_element_by_text(driver, "Category", debug=debug)
+                    if category_input:
+                        driver.execute_script("arguments[0].focus();", category_input)
+                        time.sleep(0.2)
+                        ActionChains(driver).send_keys("miscellaneous", Keys.DOWN, Keys.ENTER).perform()
+                        print("[✅] Category set on retry")
+            except:
+                pass
         
         # 5. Condition
         print("[🔍] Setting condition to Used - Good...")
@@ -1138,15 +1255,16 @@ def main():
     from fb_renewListings import main as renew_main
     driver = get_driver()
 
+
     
     fetch_main()
-    renew_main(driver)
+    # renew_main(driver)
     
     print("="*60)
     print("📦 Facebook Marketplace Listing Creator")
     print("="*60)
     print("\nThis tool automatically posts listings to Facebook Marketplace from a CSV file.")
-    
+
     try:
         # Ask for debug mode
         # print("\n[❓] Enable debug mode with detailed logs? (y/n, default: n)")

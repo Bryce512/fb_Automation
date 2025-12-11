@@ -75,13 +75,7 @@ def renew_listings(driver, max_renewals=None, debug=True):
         
         # Determine how many to renew
         to_renew = total_buttons if max_renewals is None else min(max_renewals, total_buttons)
-        
-        # Ask for confirmation
-        print(f"[❓] Found {to_renew} listings to renew. Continue? (y/n)")
-        if input().lower() != "y":
-            print("[🛑] Renewal process cancelled by user")
-            return 0
-        
+                
         # Click each renew button
         for i, button in enumerate(renew_buttons[:to_renew], 1):
             try:
